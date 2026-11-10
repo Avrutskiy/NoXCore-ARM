@@ -7,8 +7,8 @@
   <key>CFBundleExecutable</key><string>noxcore</string>
   <key>CFBundleIconFile</key><string>noxcore.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>@PROJECT_VERSION@</string>
-  <key>CFBundleVersion</key><string>@PROJECT_VERSION@</string>
+  <key>CFBundleShortVersionString</key><string>@NOX_MAC_VERSION@</string>
+  <key>CFBundleVersion</key><string>@NOX_MAC_VERSION@</string>
   <key>LSMinimumSystemVersion</key><string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
   <key>LSSupportsGameMode</key><true/>
