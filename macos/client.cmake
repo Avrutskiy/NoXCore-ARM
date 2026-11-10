@@ -48,6 +48,11 @@ foreach(shader IN LISTS NOXSDL_SHADERS)
     list(APPEND metal_sources "${cpp}")
     list(APPEND spirv_sources "${output}/shaders/${stem}_spv.cpp")
 endforeach()
+# These generation commands belong to the injected top-level directory, while
+# noxsdl belongs to its own subdirectory. Give the commands a target here so CMake
+# emits their rules. The generated source file dependencies order compilation;
+# a target dependency would create a cycle through noxsdl's SPIR-V generators.
+add_custom_target(nox_metal_shaders DEPENDS ${metal_sources})
 target_sources(noxsdl PRIVATE ${metal_sources})
 configure_file("${mac}/Info.plist.in" "${output}/Info.plist" @ONLY)
 add_custom_target(noxsdl_bundle
