@@ -1,0 +1,71 @@
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    message(FATAL_ERROR "macos/cache.cmake requires a macOS target")
+endif()
+set(mac "${PROJECT_SOURCE_DIR}/macos")
+include("${mac}/sdl_metal_upload.cmake")
+set(client "${PROJECT_SOURCE_DIR}/noxsdl")
+set(output "${PROJECT_BINARY_DIR}/noxsdl")
+# Replace implementations through CMake's public target API; fail if upstream moves them.
+get_target_property(client_sources noxsdl SOURCES)
+foreach(source IN ITEMS src/backend_hooks.cpp src/gpu_shader_code.cpp)
+    if(NOT source IN_LIST client_sources)
+        message(FATAL_ERROR "Mac client: expected noxsdl source ${source}; check the upstream source list")
+    endif()
+    list(REMOVE_ITEM client_sources "${source}")
+endforeach()
+set_property(TARGET noxsdl PROPERTY SOURCES "${client_sources}")
+target_sources(noxsdl PRIVATE "${mac}/backend.cpp" "${mac}/shader_code.cpp")
+get_directory_property(NOXSDL_GLSLANG DIRECTORY "${client}" DEFINITION NOXSDL_GLSLANG)
+get_directory_property(NOXSDL_SHADERS DIRECTORY "${client}" DEFINITION NOXSDL_SHADERS)
+find_program(NOXSDL_SPIRV_CROSS NAMES spirv-cross REQUIRED)
+if(NOT NOXSDL_GLSLANG)
+    message(FATAL_ERROR "Mac shaders need glslang")
+endif()
+set_property(SOURCE "${client}/src/main.cpp" DIRECTORY "${client}" APPEND PROPERTY COMPILE_DEFINITIONS SDL_MAIN_NOIMPL=1)
+target_sources(noxsdl PRIVATE "${mac}/launcher.cpp" "${mac}/startup.cpp" "${mac}/user_data.cpp")
+set(metal_sources)
+set(spirv_sources)
+foreach(shader IN LISTS NOXSDL_SHADERS)
+    set(spirv "${output}/shaders/${shader}.spv")
+    set(msl "${output}/shaders/${shader}.msl")
+    string(REPLACE "." "_" stem "${shader}")
+    set(cpp "${output}/shaders/${stem}_msl.cpp")
+    string(REGEX REPLACE "\\.frag$" "" name "${shader}")
+    string(REPLACE "." "_" name "${name}")
+    if(shader MATCHES "\\.vert$")
+        set(stage vert)
+    else()
+        set(stage frag)
+    endif()
+    add_custom_command(OUTPUT "${msl}"
+        COMMAND "${NOXSDL_SPIRV_CROSS}" "${spirv}" --msl --msl-version 20100
+            --msl-decoration-binding --rename-entry-point main nox_main ${stage} --output "${msl}"
+        DEPENDS "${spirv}" VERBATIM)
+    add_custom_command(OUTPUT "${cpp}"
+        COMMAND "${CMAKE_COMMAND}" "-DINPUT=${msl}" "-DOUTPUT=${cpp}" "-DSYMBOL=kShader_${name}_msl"
+            -DNULL_TERMINATE=ON -P "${PROJECT_SOURCE_DIR}/cmake/NoxEmbedFile.cmake"
+        DEPENDS "${msl}" "${PROJECT_SOURCE_DIR}/cmake/NoxEmbedFile.cmake" VERBATIM)
+    list(APPEND metal_sources "${cpp}")
+    list(APPEND spirv_sources "${output}/shaders/${stem}_spv.cpp")
+endforeach()
+target_sources(noxsdl PRIVATE ${metal_sources})
+configure_file("${mac}/Info.plist.in" "${output}/Info.plist" @ONLY)
+add_custom_target(noxsdl_bundle
+    COMMAND "${CMAKE_COMMAND}" "-DEXECUTABLE=$<TARGET_FILE:noxsdl>"
+        "-DBUNDLE=${PROJECT_BINARY_DIR}/NoX Core.app" "-DSOURCE=${PROJECT_SOURCE_DIR}"
+        "-DPLIST=${output}/Info.plist" -P "${mac}/bundle.cmake"
+    DEPENDS noxsdl VERBATIM)
+option(NOX_BUILD_METAL_TESTS "Build the Mac GPU smoke test" OFF)
+if(NOX_BUILD_METAL_TESTS)
+    add_executable(nox_metal_smoke "${mac}/tests/metal_smoke.cpp" "${mac}/shader_code.cpp"
+        "${client}/src/gpu_shaders.cpp" ${metal_sources} ${spirv_sources})
+    target_compile_features(nox_metal_smoke PRIVATE cxx_std_20)
+    target_include_directories(nox_metal_smoke PRIVATE "${client}/src")
+    target_compile_definitions(nox_metal_smoke PRIVATE NOXSDL_HAVE_SPIRV=1)
+    target_link_libraries(nox_metal_smoke PRIVATE SDL3::SDL3 nox_warnings)
+    add_executable(nox_gpu_atlas_tests "${mac}/tests/gpu_atlas_tests.cpp" "${client}/src/gpu_atlas.cpp"
+        ${metal_sources} ${spirv_sources})
+    target_compile_features(nox_gpu_atlas_tests PRIVATE cxx_std_20)
+    target_include_directories(nox_gpu_atlas_tests PRIVATE "${client}/src")
+    target_link_libraries(nox_gpu_atlas_tests PRIVATE SDL3::SDL3 nox_warnings)
+endif()

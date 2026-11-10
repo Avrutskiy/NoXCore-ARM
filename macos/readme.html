@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>NoX Core — Mac setup</title>
+<h1>NoX Core for Apple Silicon</h1>
+<p>Requires macOS 26 or later and your own copy of Nox. The app includes no original game assets.</p>
+<p>Place NoX Core.app in your Nox data folder, or copy the game's data to
+<code>~/Library/Application Support/NoXCore/GameData</code>.
+In Finder, choose Go → Go to Folder to open that location.</p>
+<h2>Saves, settings and backups</h2>
+<p>Characters and campaign saves are in
+<code>~/Library/Application Support/NoXCore/UserData/Save</code>.
+Settings (<code>nox.cfg</code> and <code>noxcore.cfg</code>) are in the parent
+<code>UserData</code> folder. These locations are separate from the app and game data.</p>
+<p>In Finder, press <strong>Shift–Command–G</strong> (Go → Go to Folder) and paste the path.
+The <code>~</code> means your home folder. The game creates these directories on first use.</p>
+<p>To back up or transfer progress, quit the game and copy the <strong>whole Save folder</strong>,
+including its subfolders. To restore it, quit the game, keep a copy of the current folder,
+and replace it with your backup. Copy the two settings files too if you want to keep them.
+Replacing NoX Core.app during an update leaves these files in place.</p>
+<p>Existing settings and saves from the selected game-data folder are imported once without
+overwriting user files. The originals remain in place. Later launches do not repeat the import
+or restore deleted characters.</p>
+<p>From Terminal, <code>--user-dir "/path/to/UserData"</code> changes the settings location and
+the default save location to its <code>Save</code> subfolder. An explicit
+<code>--save-dir "/path/to/Save"</code> overrides the save location and skips automatic save import.</p>
+<p>The log is <code>~/Library/Application Support/noxcpp/noxsdl/noxcore-log.txt</code>.</p>
+<p>The notch/safe-area fix is not included yet. Exclusive fullscreen on a notched display
+has a known layout/input limitation; use windowed mode if content or pointer alignment is affected.</p>
+<p>This app is ad-hoc signed, not Developer ID signed or notarized. You can build and sign
+your own copy with the commands in BUILDING.txt; no paid developer account is required.</p>
+<p>NoX Core is an unofficial fan project, not affiliated with Electronic Arts or Westwood Studios.
+Nox is a trademark of Electronic Arts Inc.</p>
+</html>

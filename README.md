@@ -1,7 +1,19 @@
-# NoX Core
+# NoXCore-Mac
+
+Apple Silicon / Metal port of [NoX Core](https://github.com/mordentral/NoXCore).
+
+The Mac implementation is isolated in `macos/`. Apart from this README, the fork adds
+only Mac implementation and workflow files. Upstream fonts, gameplay, input mapping
+and editor code are retained.
+
+**[Download the Mac build](https://github.com/Avrutskiy/NoXCore-Mac/releases/latest).**
+
+Mac-specific issues belong in [this fork's issue tracker](https://github.com/Avrutskiy/NoXCore-Mac/issues).
+Upstream does not build, test or support macOS. See [macos/BUILDING.txt](macos/BUILDING.txt) for build and
+maintenance details. Release assets are built from the tagged source revision.
 
 **A modern client for Nox** (Westwood Studios, 2000): the game as you know it, cleaned up, with
-new features, for today's hardware, on Windows and Linux.
+new features, for today's Apple Silicon Macs.
 
 NoX Core plays just like the original and speaks its network protocol, so NoX Core players and
 players on the original game join each other's games, on the original's servers and on ours. Bugs
@@ -9,12 +21,10 @@ that cheaters and troublemakers could use are fixed; the quirks players have com
 kept. It is written from scratch, from our own analysis of how the game behaves; no code from the
 original game is included.
 
-- **Website and ready-made Windows builds:** https://noxhub.net/
+- **Upstream website:** https://noxhub.net/
 - **Everything it adds:** https://noxhub.net/features.html
 - **What changed lately:** https://noxhub.net/patch-notes.html
 - **Video walkthroughs** (map editor, scripting, mods): https://noxhub.net/walkthroughs.html
-- **macOS:** a community-maintained fork by Avrutskiy, with its own builds and support:
-  https://github.com/Avrutskiy/NoXCore-Mac
 
 > You need your own copy of Nox (GOG, Origin or the original CD). NoX Core contains none of the
 > game's art, sound, music, maps or text; it reads them from your installed game when it runs.
@@ -36,47 +46,69 @@ original game is included.
 
 ## Building
 
-Short version (full details, prerequisites and options in [BUILDING.txt](BUILDING.txt)):
+Short version (full details, prerequisites and options in [macos/BUILDING.txt](macos/BUILDING.txt)):
 
-**Windows** (Visual Studio 2022 with "Desktop development with C++"), from a Developer
-PowerShell:
-
-```
-cmake --preset msvc-release
-cmake --build --preset msvc-release
-```
-
-The client is `build\msvc-release\noxsdl\noxcore.exe`.
-
-**Linux** (GCC 13+, CMake 3.25+, Ninja, glslang and SDL3's development packages; the Ubuntu
-24.04 package list is in BUILDING.txt):
+**macOS ARM64** (macOS 26+, Xcode 26 Command Line Tools, CMake, Ninja, glslang and SPIRV-Cross):
 
 ```
-cmake --preset linux-release
-cmake --build --preset linux-release
+cmake -S . -B build/macos-arm64 -G Ninja -C macos/cache.cmake
+cmake --build build/macos-arm64 --target noxsdl_bundle -j 4
 ```
 
-The client is `build/linux-release/noxsdl/noxcore`.
+The app is `build/macos-arm64/NoX Core.app`, ad-hoc signed and not notarized.
+Place it in your Nox data folder, or copy your data to
+`~/Library/Application Support/NoXCore/GameData`. Settings and saves use
+`~/Library/Application Support/NoXCore/UserData`. See [macos/BUILDING.txt](macos/BUILDING.txt) for details.
+
+The opt-in notch/safe-area changes in upstream PR #23 are not included yet. Exclusive
+fullscreen on a notched display has a known layout/input limitation; use windowed mode
+if content or pointer alignment is affected.
 
 The first configure downloads the pinned third-party libraries, so it needs a network connection.
 
 ## Running
 
-Start `noxcore.exe` (Linux: `noxcore`). It finds your Nox install by itself: its own folder, the
-current folder, then the usual GOG, Origin and CD installs (on Linux, the usual Wine, Lutris and
-Heroic prefixes). Point it at another copy with `--game-dir DIR` or the `NOX_DATA` environment
-variable. The folder it chose, and why, is written to `noxcore-log.txt` beside the program.
+Extract the release ZIP and open **NoX Core.app** in Finder. Place the app in your Nox data
+folder, or copy the game's data to `~/Library/Application Support/NoXCore/GameData`.
+Your own Nox game data is required; it is not included in the download.
 
-**Saved servers:** Network Game's **Add/Remove** saves a hostname or IPv4 address (optional
-`:port`, 18590 by default) to `servers.txt` in the game folder, or removes one. The list pings
-them on every refresh, beside the LAN's games; one that doesn't answer stays listed ("No response")
-and can still be joined. `servers.txt` beside the program is read as well; one address per line,
-`#` starts a comment.
+To select a different data folder from Terminal, run the executable inside the app bundle:
+
+```sh
+"/path/to/NoX Core.app/Contents/MacOS/noxcore" --game-dir "/path/to/Nox"
+```
+
+### Saves, settings and backups
+
+The Mac build keeps each user's progress and settings outside the app and game-data folder:
+
+| Files | Default location |
+|---|---|
+| Characters and campaign saves | `~/Library/Application Support/NoXCore/UserData/Save` |
+| Settings (`nox.cfg`, `noxcore.cfg`) | `~/Library/Application Support/NoXCore/UserData` |
+| Game log | `~/Library/Application Support/noxcpp/noxsdl/noxcore-log.txt` |
+
+In Finder, press **Shift–Command–G** (Go → Go to Folder) and paste a location above.
+The `~` means your home folder. These directories are created when the game first runs.
+
+To back up or transfer progress, quit the game and copy the **whole `Save` folder**, including
+its subfolders. To restore it, quit the game, keep a copy of the current folder, and replace it
+with your backup. Copy `nox.cfg` and `noxcore.cfg` too if you want to keep your settings.
+Replacing **NoX Core.app** during an update leaves these files in place.
+
+On first use, existing settings and saves from the selected game-data folder are copied into
+the user directory without overwriting existing files. The originals remain in place.
+Later launches do not repeat that import or restore characters you have deleted.
+
+For a custom location, pass `--user-dir "/path/to/UserData"`. It changes the settings directory
+and the default save location to its `Save` subfolder. An explicit
+`--save-dir "/path/to/Save"` overrides the save location and skips automatic save import.
 
 ## What's in this repository
 
 | Folder | What it holds |
 |---|---|
+| `macos/` | The isolated Mac implementation: startup, user data, Metal shaders, app packaging, build configuration and tests. |
 | `noxcore/` | The engine library: the game's file formats, its network protocol, and the game simulation that hosted games run on. |
 | `noxsdl/` | The NoX Core client on SDL3: menus, play, hosting, rendering, audio and the map editor. |
 | `modes/` | The built-in game modes (Delve, Undead Tide, the co-op campaign) and the Luau scripting that mods use. |
@@ -88,8 +120,9 @@ and can still be joined. `servers.txt` beside the program is read as well; one a
 
 ## Reporting bugs
 
-Bug reports are welcome as GitHub issues. Please include `noxcore-log.txt` (it's beside the
-program) and say whether the game was hosted by NoX Core or by the original game.
+Bug reports are welcome as GitHub issues. Please include
+`~/Library/Application Support/noxcpp/noxsdl/noxcore-log.txt` and say whether the game was
+hosted by NoX Core or by the original game.
 
 ## Licence
 

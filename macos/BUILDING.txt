@@ -1,0 +1,91 @@
+NoXCore-Mac: additive Mac implementation
+=======================================
+
+Requires Apple Silicon, macOS 26+, Xcode 26 Command Line Tools, CMake 3.25+, Ninja,
+glslang and SPIRV-Cross. The deployment target follows libc++ floating-point from_chars.
+
+  brew install cmake ninja glslang spirv-cross
+  cmake -S . -B build/macos-arm64 -G Ninja -C macos/cache.cmake
+  cmake --build build/macos-arm64 --target noxsdl_bundle -j 4
+
+The first configure downloads the pinned upstream dependencies. The app is
+build/macos-arm64/NoX Core.app. It is ad-hoc signed, not notarized. It includes fonts,
+licenses and mods, but no original game data. NOX_BUILD_VIDEOTOOLS is OFF for this build.
+
+Data and writable state
+-----------------------
+Place the app beside your installed game data, or place the data in
+~/Library/Application Support/NoXCore/GameData. Bundled Contents/Resources/GameData
+is also recognized. --game-dir overrides discovery; NOX_DATA is checked before the
+bundle and usual folders. The launcher passes the selected directory to upstream.
+
+Settings and saves use ~/Library/Application Support/NoXCore/UserData, with saves in
+Save/. --user-dir overrides this Mac location. Migration preserves existing user files
+and does not resurrect deleted characters. Input Config Reset reads the user nox.cfg;
+Defaults reads the installed game default.cfg.
+
+For backups or transfers, quit the game and copy the entire UserData/Save directory,
+including its subfolders. Preserve the current directory before restoring a backup.
+Copy nox.cfg and noxcore.cfg separately to retain settings. Replacing the app does not
+replace this per-user data. Finder's Go > Go to Folder (Shift-Command-G) opens these paths.
+An explicit --save-dir overrides the default and skips automatic save import.
+
+SDL_GetPrefPath selects the persistent per-user location; on macOS this is Application
+Support. This keeps settings and progress independent of asset-folder permissions and
+app updates.
+
+The launcher supplies --save-dir, --map-cache and --log defaults through upstream's
+existing options. Explicit values retain precedence. The default log is
+~/Library/Application Support/noxcpp/noxsdl/noxcore-log.txt. These defaults keep settings, saves, map caches and logs outside
+the signed bundle. Launching its Contents/MacOS/noxcore executable also uses this setup.
+
+Source structure
+----------------
+Upstream PR #22 supplies two Mac policy functions: a settings directory and additional
+window-creation flags. Other platforms use inline defaults. The upstream default
+implementations and shaders remain the normal build. The fork's implementation changes
+are confined to macos/ and its Mac workflow; shared engine and client sources match upstream.
+
+macos/sdl_metal_upload.cmake backports SDL commit 32f9c098 (Metal upload row stride)
+to the pinned SDL 3.4.16 source. The game keeps its normal 256-byte atlas layout.
+The backport is idempotent and stops configuration if the source no longer matches;
+remove it when the pinned SDL includes the fix. When sharing a FetchContent source
+cache with other builds, give the Mac build its own SDL source directory.
+
+macos/cache.cmake uses CMake's standard project-injection API to load client.cmake after
+upstream's targets exist. CMake's SOURCES target property replaces backend_hooks.cpp
+and gpu_shader_code.cpp with the Mac implementations; configuration fails if either
+expected source is missing. It also adds the launcher, Metal shaders and app packaging. SDL's
+standard callback entry point is emitted by launcher.cpp, which prepares state and calls
+the original SDL_AppInit. SDL_AppIterate, SDL_AppEvent and SDL_AppQuit remain upstream.
+No existing NoXCore source file is patched or copied into a modified build tree.
+
+The notch/safe-area changes in upstream PR #23 are not included. The Mac build does not
+enable NOXSDL_USE_DISPLAY_SAFE_AREA, and the bundle does not override macOS's display
+safe-area compatibility policy. Exclusive fullscreen on a notched display has a known
+layout/input limitation. Use windowed mode if content or pointer alignment is affected.
+
+Checks
+------
+Asset-free startup and migration tests:
+
+  cmake -S macos/tests -B build/mac-tests -G Ninja -DCMAKE_BUILD_TYPE=Release
+  cmake --build build/mac-tests
+  ctest --test-dir build/mac-tests --output-on-failure
+
+On a Mac graphics session, compile and run GPU checks:
+
+  cmake -S . -B build/macos-arm64 -G Ninja -C macos/cache.cmake -DNOX_BUILD_METAL_TESTS=ON
+  cmake --build build/macos-arm64 --target nox_metal_smoke nox_gpu_atlas_tests -j 4
+  build/macos-arm64/nox_metal_smoke
+  build/macos-arm64/nox_gpu_atlas_tests
+
+These check shader creation/readback and Metal atlas uploads with the upstream
+256-byte atlas alignment. Test commands and cheats stay OFF in the shipped client.
+
+Maintenance
+-----------
+Keep Mac implementation, packaging and tests in Mac files. Compare the fork against its
+upstream base: all entries must be added files except README.md. PR #22 is part of the
+upstream base; keep PR #23 separate until it is accepted and deliberately enabled.
+Preserve release tags when updating main; release assets must match their tagged source.

@@ -1,0 +1,7 @@
+# Load with cmake -S . -B build/macos-arm64 -C macos/cache.cmake.
+get_filename_component(NOX_MAC_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+set(CMAKE_OSX_ARCHITECTURES arm64 CACHE STRING "")
+set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0 CACHE STRING "")
+set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "")
+set(NOX_BUILD_VIDEOTOOLS OFF CACHE BOOL "")
+set(CMAKE_PROJECT_noxcpp_INCLUDE "${NOX_MAC_ROOT}/macos/project.cmake" CACHE FILEPATH "" FORCE)

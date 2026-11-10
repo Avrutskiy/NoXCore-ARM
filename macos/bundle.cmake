@@ -1,0 +1,34 @@
+# Ad-hoc signed .app packaging. No game assets; SDL_GetBasePath points to Resources.
+file(MAKE_DIRECTORY "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Resources")
+file(COPY_FILE "${EXECUTABLE}" "${BUNDLE}/Contents/MacOS/noxcore" ONLY_IF_DIFFERENT)
+file(COPY_FILE "${PLIST}" "${BUNDLE}/Contents/Info.plist" ONLY_IF_DIFFERENT)
+file(COPY "${SOURCE}/mods" DESTINATION "${BUNDLE}/Contents/Resources")
+# SDL_GetBasePath resolves to Resources in an app bundle. Upstream loads its
+# original-style TrueType faces from the fonts directory below that path.
+file(COPY "${SOURCE}/noxsdl/res/fonts" DESTINATION "${BUNDLE}/Contents/Resources")
+foreach(name LICENSE NOTICE.txt THIRD_PARTY_NOTICES.txt)
+    file(COPY "${SOURCE}/${name}" DESTINATION "${BUNDLE}/Contents/Resources")
+endforeach()
+# The client stages every embedded font's licence beside its executable.
+get_filename_component(executable_dir "${EXECUTABLE}" DIRECTORY)
+file(GLOB font_licenses "${executable_dir}/*-OFL.txt")
+if(NOT font_licenses)
+    message(FATAL_ERROR "No staged font licences beside ${EXECUTABLE}")
+endif()
+file(COPY ${font_licenses} DESTINATION "${BUNDLE}/Contents/Resources")
+file(COPY_FILE "${SOURCE}/macos/readme.html" "${BUNDLE}/Contents/Resources/Mac Setup.html" ONLY_IF_DIFFERENT)
+get_filename_component(bundle_parent "${BUNDLE}" DIRECTORY)
+set(iconset "${bundle_parent}/noxcore.iconset")
+file(MAKE_DIRECTORY "${iconset}")
+foreach(size 16 32 128 256 512)
+    math(EXPR double_size "${size} * 2")
+    execute_process(COMMAND /usr/bin/sips -z ${size} ${size} "${SOURCE}/noxsdl/res/noxcore.png"
+        --out "${iconset}/icon_${size}x${size}.png" OUTPUT_QUIET COMMAND_ERROR_IS_FATAL ANY)
+    execute_process(COMMAND /usr/bin/sips -z ${double_size} ${double_size} "${SOURCE}/noxsdl/res/noxcore.png"
+        --out "${iconset}/icon_${size}x${size}@2x.png" OUTPUT_QUIET COMMAND_ERROR_IS_FATAL ANY)
+endforeach()
+execute_process(COMMAND /usr/bin/iconutil -c icns "${iconset}"
+    -o "${BUNDLE}/Contents/Resources/noxcore.icns" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND /usr/bin/codesign --force --sign - --timestamp=none "${BUNDLE}" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND /usr/bin/codesign --verify --strict "${BUNDLE}" COMMAND_ERROR_IS_FATAL ANY)
+message(STATUS "App: ${BUNDLE} (ad-hoc signed; not Developer ID signed or notarized)")
