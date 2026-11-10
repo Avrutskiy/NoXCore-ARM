@@ -7,6 +7,13 @@
 <p>Place NoX Core.app in your Nox data folder, or copy the game's data to
 <code>~/Library/Application Support/NoXCore/GameData</code>.
 In Finder, choose Go → Go to Folder to open that location.</p>
+<h2>Game Mode</h2>
+<p>The app supports macOS Game Mode, which activates automatically in native full screen.
+Open the app from Finder. From Terminal, use
+<code>open "/path/to/NoX Core.app" --args --game-dir "/path/to/Nox"</code>;
+launching the executable directly may prevent Game Mode activation.
+Game Mode does not activate in a regular window. If you previously turned it off for this
+app, turn it back on in the macOS Game Overlay (<strong>Command–Esc</strong>) while in full screen.</p>
 <h2>Saves, settings and backups</h2>
 <p>Characters and campaign saves are in
 <code>~/Library/Application Support/NoXCore/UserData/Save</code>.

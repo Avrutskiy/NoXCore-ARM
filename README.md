@@ -72,11 +72,16 @@ Extract the release ZIP and open **NoX Core.app** in Finder. Place the app in yo
 folder, or copy the game's data to `~/Library/Application Support/NoXCore/GameData`.
 Your own Nox game data is required; it is not included in the download.
 
-To select a different data folder from Terminal, run the executable inside the app bundle:
+To select a different data folder from Terminal, launch the app with arguments:
 
 ```sh
-"/path/to/NoX Core.app/Contents/MacOS/noxcore" --game-dir "/path/to/Nox"
+open "/path/to/NoX Core.app" --args --game-dir "/path/to/Nox"
 ```
+
+The app opts into macOS Game Mode, which activates automatically in native full screen.
+Launch from Finder or use `open` as above; running the executable directly from Terminal
+may prevent activation. Game Mode does not activate in a regular window. If you previously
+turned it off for this app, turn it back on in the macOS Game Overlay (Command–Esc).
 
 ### Saves, settings and backups
 

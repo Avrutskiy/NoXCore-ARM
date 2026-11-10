@@ -12,6 +12,19 @@ The first configure downloads the pinned upstream dependencies. The app is
 build/macos-arm64/NoX Core.app. It is ad-hoc signed, not notarized. It includes fonts,
 licenses and mods, but no original game data. NOX_BUILD_VIDEOTOOLS is OFF for this build.
 
+Game Mode
+---------
+The bundle declares public.app-category.games and LSSupportsGameMode=true. macOS
+activates Game Mode when the app enters native full screen; a regular window does not
+activate it. Launch through Finder or Launch Services, including when passing arguments:
+
+  open "build/macos-arm64/NoX Core.app" --args --game-dir "/path/to/Nox"
+
+Launching Contents/MacOS/noxcore directly from Terminal may prevent Game Mode activation.
+If a player previously disabled Game Mode for this app, macOS remembers that choice;
+they can turn it back on in the Game Overlay (Command-Esc) while in full screen.
+The opt-in does not change the selected display mode or the notch limitation below.
+
 Data and writable state
 -----------------------
 Place the app beside your installed game data, or place the data in
