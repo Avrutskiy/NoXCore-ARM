@@ -22,10 +22,16 @@
 -- minions are the mod's monsters too (the party rule, the scaling), their entries marked `minion`
 -- (and `master`, the summoner's id): main.luau gives no experience or loot for their deaths.
 
+--
+-- Waking (wake.luau): each pack, and the end chamber's champion with its guards, is told to
+-- wake.luau with the room it stands in, so a room's monsters wake as a hero comes into it, and a
+-- pack together when one of it is struck.
+
 local data = require("data/monsters")
 local numbers = require("data/numbers")
 local powers = require("powers")
 local scale = require("scale")
+local wake = require("wake")
 
 local monsters = {}
 
@@ -39,8 +45,8 @@ type Kind = { type: string, health: number }
 local known: { [number]: any } = {}
 -- The live ones with a name (their plates): id -> its entry in `known`.
 local named: { [number]: any } = {}
--- The named ones that rise again lying dead now, their plates down (monsters.killed): id -> its
--- entry in `known`.
+-- The named or powered ones that rise again lying dead now, their plates down and their powers'
+-- beats stopped (monsters.killed): id -> its entry in `known`.
 local lying: { [number]: any } = {}
 -- Called as a named monster comes or goes (labels.luau's plates), or nil.
 local namedChanged: (() -> ())? = nil
@@ -298,8 +304,10 @@ monsters.spawn = spawn
 -- its followers), the champion and its guards in the end chamber (a lair has no champion's spot:
 -- its boss is boss.luau's). `area`: areas.info's ({ roster (its biome's, or the area's own), level,
 -- index }; an expedition's map hands its roster and champion themselves, runRoster and
--- runChampion, and its guards).
+-- runChampion, and its guards). Each pack (and the champion's group) is told to wake.luau with
+-- its room (the spot's `room`, spots.rooms'), so a room's monsters wake as a hero comes in.
 function monsters.populate(spots: any, area: any)
+	wake.rooms(spots.rooms)
 	local rosterName = area.roster or area.biome
 	local roster = area.runRoster or (data.rosters :: any)[rosterName] or data.rosters.Crypt
 	here = { roster = roster, area = area }
@@ -350,9 +358,11 @@ function monsters.populate(spots: any, area: any)
 			local tier = if quiet then "normal" else rollTier(area.level)
 			local followers = if quiet then f.fewest else nox.random(f.fewest, f.most)
 			local pack = { along = along, size = 0, tier = tier, leader = leaderType, experience = 0, rising = 0 }
+			local ids: { number } = {}
 			local function made(id: number?)
 				local e = id and known[id]
 				if e then
+					table.insert(ids, id :: number)
 					pack.size += 1
 					pack.experience += e.experience
 					if risingTypes[e.type] then
@@ -366,6 +376,7 @@ function monsters.populate(spots: any, area: any)
 				local t = if nox.random() < 0.5 then leaderType else (pickType(roster, area, plain, light) or leaderType)
 				made(spawn(t, spot.x, spot.y, if tier == "rare" then "magic" else "normal", area.level))
 			end
+			wake.pack(ids, tonumber(spot.room))
 			table.insert(packList, pack)
 		end
 	end
@@ -374,9 +385,11 @@ function monsters.populate(spots: any, area: any)
 	if champ and spots.guardian then
 		local g = spots.guardian
 		local group: any = { size = 0, experience = 0 }
+		local ids: { number } = {}
 		local function made(id: number?)
 			local e = id and known[id]
 			if e then
+				table.insert(ids, id :: number)
 				group.size += 1
 				group.experience += e.experience
 			end
@@ -387,8 +400,21 @@ function monsters.populate(spots: any, area: any)
 		for _ = 1, if opening and opening.guards then opening.guards else (area.guards or champ.guards) do
 			made(spawn(pickType(roster, area) or champ.type, g.x, g.y, "magic", area.level))
 		end
+		wake.pack(ids, tonumber(g.room))
 		guarded = group
 	end
+	wake.start()
+end
+
+-- A group the host's console made ("dd spawn"): one pack (no room), as the area's are.
+function monsters.grouped(ids: { number })
+	wake.pack(ids)
+end
+
+-- A hit on one of the mod's monsters with a hero behind it (combat.luau; `foes`: the hero and what
+-- struck for it): its pack wakes (wake.luau).
+function monsters.struck(target: number, foes: { number })
+	wake.struck(target, foes)
 end
 
 -- The `n` weakest types of the roster where the monsters are now (by monster.bin's health, the
@@ -429,11 +455,12 @@ function monsters.weakTypes(n: number): { string }
 	return out
 end
 
--- A monster out of the index (and its plate's): its entry, or nil.
+-- A monster out of the index (and its plate's, and its pack's): its entry, or nil.
 local function drop(id: number): any
 	local e = known[id]
 	known[id] = nil
 	lying[id] = nil
+	wake.forget(id)
 	if named[id] then
 		named[id] = nil
 		namedNow()
@@ -450,22 +477,27 @@ end
 -- skills, its Rage). Its plate comes down while it lies (monsters.standing puts it back). Only its
 -- first death gives anything (by decision 2026-10-29: a risen zombie gives nothing), and it's
 -- forgotten only as its body goes (monsters.gone) or with the map.
+--
+-- Its powers that act by themselves (their beat: burning, a summoner's minions and the rest) stop
+-- at each of its deaths, its minions crumbling, and start again as it was made when it stands
+-- (by decision 2026-11-10; monsters.standing). Its death powers (splitting, stormcharged) go off at
+-- its first death alone, with the rest of what that death gives.
 function monsters.killed(id: number): any
 	local e = known[id]
 	if e and risingTypes[e.type] then
+		if e.name or e.powers then
+			lying[id] = e
+		end
 		if named[id] then
 			named[id] = nil
-			lying[id] = e
 			namedNow()
 		end
-		if e.died then
-			return nil
-		end
+		local first = not e.died
 		e.died = true
 		if e.powers then
-			powers.died(id, e)
+			powers.died(id, e, not first)
 		end
-		return e
+		return if first then e else nil
 	end
 	e = drop(id)
 	if e and e.powers then
@@ -488,15 +520,21 @@ function monsters.gone(id: number, thingType: string?)
 	end
 end
 
--- The named ones lying dead that the engine has stood up again: their plates back (labels.luau's
--- beat; a walk of those lying alone).
+-- The ones lying dead that the engine has stood up again: a named one's plate back, a powered
+-- one's beat started again as it was made (powers.rose) (labels.luau's beat; a walk of those lying
+-- alone).
 function monsters.standing()
 	local any = false
 	for id, e in lying do
 		if nox.living(id) then
 			lying[id] = nil
-			named[id] = e
-			any = true
+			if e.name then
+				named[id] = e
+				any = true
+			end
+			if e.powers then
+				powers.rose(id, e)
+			end
 		elseif not nox.present(id) then
 			lying[id] = nil
 		end
@@ -608,6 +646,7 @@ function monsters.reset()
 	weakest = nil
 	sight = nil
 	powers.reset()
+	wake.reset()
 end
 
 powers.attach(monsters)

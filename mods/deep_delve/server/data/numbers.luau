@@ -77,6 +77,17 @@ numbers.areas = {
 	lair = { segments = 3, packs = 5, endRadius = 13 },
 }
 
+-- A room's monsters waking (wake.luau). The engine's own look finds a foe within a monster's
+-- sight (its own at least 250; outdoors the biome's, data/acts.luau's sights) with nothing between
+-- them. A room's monsters see further once a hero comes into the room, so the whole room
+-- notices: each one's sight then reaches the room's far side.
+--   every   frames between looks at the rooms still asleep (one unitsNear a room)
+--   margin  cells past a room's edge that count as in it (its doorway)
+--   hit     a pack member struck by a hero (or its creature): each of the pack's sight reaches this
+--           past whoever struck, so the pack turns on it together (still only in its sight)
+--   most    no sight set past this
+numbers.wake = { every = 10, margin = 1, hit = 40, most = 1000 }
+
 -- ---- Waypoints, the portal, the boss
 
 numbers.waypoints = {
@@ -86,7 +97,19 @@ numbers.waypoints = {
 	-- The sound a hero sent home by an area's waypoint makes where it stood and where it lands
 	-- (the game's own pentagram's).
 	sound = 0x93,
+	-- The game's own pentagram's cycle (its update in the engine; no game data holds it): a touch
+	-- while it's idle winds it up, its frames 1-8 one a frame, and at the eighth it sends whoever
+	-- stands on it then; it then winds down, frames 1-8 three times more at 2, 3 and 4 frames each
+	-- (72, and a frame between each turn and at its end), and takes nobody till it's idle again:
+	-- 82 frames in all from the touch.
+	windUp = 8,
+	windDown = 74,
 }
+
+-- A hero moved by a way within the map brings its own creatures (summons.luau's bring): each put
+-- beside it, `beside` past their edges, on clear ground the game finds within `room` of that;
+-- the creatures it owns that the mod never saw made looked for within `reach` of where it stood.
+numbers.along = { beside = 10, room = 30, reach = 400 }
 
 numbers.portal = {
 	-- An open portal's sparks where it stands (nox.effect: violet), every `every` frames.
@@ -95,7 +118,7 @@ numbers.portal = {
 }
 
 -- The ways (touch.luau): the things that take a player elsewhere (the town's gate, the way home,
--- the exit, the portal's and the waypoints' pentagrams, a lair's gate). For `grace` frames after a
+-- the exit, the portal's and the waypoints' pentagrams, an area's waypoint, a lair's gate). For `grace` frames after a
 -- player arrives somewhere (a way, a portal, a waypoint, a new map, a respawn) no way takes it; one
 -- it touched in that time takes it only at a new step onto it. A new step: a touch after none for
 -- more than `gap` frames (a station's pad's too: the waypoints' pentagram, the map table).
@@ -104,9 +127,13 @@ numbers.touch = { grace = 60, gap = 15 }
 -- The pads' rings on the floor (decals.luau): the asset, its size across (world units; a
 -- pentagram's own ring is about 52 across, so its ring sits inside the picture's outer band), its
 -- turn (degrees a second) and its alpha's pulse (amount 0-1, period in seconds). Drawn additive.
+-- An area's waypoint winding up and down (waypoints.luau) gets a second ring over its own while
+-- it does: `windUp` turning fast and pulsing its size, then `windDown`, slower.
 numbers.decals = {
 	waypoint = { asset = "fx/waypoint", size = 80, spin = 12, pulse = 0.25, period = 3 },
 	portal = { asset = "fx/portal", size = 80, spin = -40, pulse = 0.35, period = 1.6 },
+	windUp = { asset = "fx/waypoint", size = 72, spin = 360, pulse = 0.6, period = 0.27, scale = true },
+	windDown = { asset = "fx/waypoint", size = 80, spin = 90, pulse = 0.4, period = 1.2 },
 }
 
 numbers.boss = {

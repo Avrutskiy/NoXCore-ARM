@@ -34,6 +34,10 @@
 --   dd town              the act's town: its look and name
 --   dd sight             how far the map's monsters look (its biome's, or the engine's own), and the
 --                        mod's live monsters' reach
+--   dd wake [on|off|all] the rooms waking as a hero comes in (wake.luau): "off" none wakes (nor a
+--                        pack struck), "on" again, "all" every room awake now; then "wake on|off,
+--                        rooms N, asleep A, beats B, us U, raised R, hits H" and each room "room I X
+--                        Y radius R reach D door X Y|none monsters M woken 0|1 ids A,B,...|-"
 --   dd gate [take]       the lair's gate to the next act (its spot, open or shut, its swirl and
 --                        light); "take": the first player steps into it (the game on, or a vote)
 --   dd atlas [levels | free on|off | go BIOME RANK | run | slay]   the expeditions: the first
@@ -43,7 +47,8 @@
 --   dd portal            the first player opens a town portal (as its UI's button does)
 --   dd waypoint N        the first player to area N's waypoint of the act being played ("A-N":
 --                        of act A; one it has found), as a click in the town's waypoints window
---                        sends it (wherever it stands)
+--                        sends it (wherever it stands); "dd waypoint wind": this area's waypoint's
+--                        cycle now (idle, up, down)
 --   dd progress          the first player's record: its version, its act progress, boss kills
 --   dd boss              the boss of this map: id, type, health, name
 --   dd fight [now]       the boss's fight (the barrow-king's: its phase, adds, charges, mists,
@@ -148,8 +153,10 @@
 --                        one); POWERS: their powers, comma-separated ids, or "none" (else its tier's
 --                        rolled); "id code tier name"
 --   dd powers [clear]    each live monster with powers ("id type tier powers drops D xp X", a
---                        summoner's then "minions IDS") and what the powers
---                        have done ("done: ..."); "clear": those counts back to none
+--                        summoner's then "minions IDS", then "beat 1" while its beat runs, else
+--                        "beat 0"), how many have a beat now ("beating N")
+--                        and what the powers have done ("done: ..."); "clear": those counts back
+--                        to none
 --   dd slay ID           one of the mod's monsters killed by the first player
 --   dd portals           the open portals, "owner x y" ("owner(left)": its owner left the game)
 --   dd portal take       the first player through the town's portal pentagram (as its touch)
@@ -195,6 +202,7 @@ local regen = require("regen")
 local characters = require("roster")
 local town = require("town")
 local waypoints = require("waypoints")
+local wake = require("wake")
 local book = require("book")
 local sheet = require("sheet")
 local stash = require("stash")
@@ -493,6 +501,11 @@ function commands.sight(_args: { string }): { string }
 		"sight " .. (if s then tostring(s) else "engine"),
 		string.format("monsters %d, reach %d-%d", n, if n > 0 then math.floor(low + 0.5) else 0, math.floor(high + 0.5)),
 	}
+end
+
+-- "dd wake [on|off|all]": the rooms waking (wake.luau's lines).
+function commands.wake(args: { string }): { string }
+	return wake.command(args[2])
 end
 
 function commands.area(args: { string }): { string }
@@ -822,15 +835,19 @@ function commands.spawn(args: { string }): { string }
 	end
 	local roster: any = (monsterData.rosters :: any)[s.roster] or monsterData.rosters.Crypt
 	local out = {}
+	local ids: { number } = {}
 	for i = 1, math.clamp(tonumber(args[3]) or 1, 1, 60) do
 		-- (a widening ring round the player)
 		local r = 60 + 6 * i
 		local id = monsters.spawn(thingType or roster[1].type, o.x + r * math.cos(i * 1.3), o.y + r * math.sin(i * 1.3), tier, s.level, fixed, want)
 		local m: any = if id then monsters.info(id) else nil
 		if id and m then
+			table.insert(ids, id)
 			table.insert(out, table.concat({ tostring(id), tostring(m.code), tier, tostring(m.name or "-") }, " "))
 		end
 	end
+	-- (the group one pack: one struck wakes the rest)
+	monsters.grouped(ids)
 	return if #out > 0 then out else { "not made" }
 end
 
@@ -865,6 +882,9 @@ function commands.slay(args: { string }): { string }
 end
 
 function commands.waypoint(args: { string }): { string }
+	if args[2] == "wind" then
+		return { waypoints.wind() }
+	end
 	local h = firstHero()
 	if not h then
 		return { "no player" }
@@ -1899,7 +1919,7 @@ function commands.help(_args: { string }): { string }
 		"dd tree [take ID...|respec|refund [ID]|nodes [REGION]|describe ID [CLASS]|costs|find NAME...] | icons | book | sheet [gear] | ui stash|vendor|waypoints|tree|sheet [NAME]",
 		"dd warrior [rage N | clear] | actives [clear | ready] | upgrades [clear]",
 		"dd as NAME COMMAND | party | scale | packs | regen | exit | vote [yes|no|cancel|seconds N] | labels | plates | spawn TIER [N] [TYPE|-] [POWERS|none] | powers [clear] | slay ID | portals | portal take | hud",
-		"dd option [lootNames alt|always] | hits [clear] | summons | team",
+		"dd option [lootNames alt|always] | hits [clear] | summons | team | sight | wake [on|off|all]",
 		"dd give unique ID [L] | give set PIECE [L] | uniques [list|check|odds N LEVEL TIER [BOSS]|drop unique|set ID [L]|worn|powers]",
 		"dd secrets [trial SEED N | go lever|room|chest I|door|keyguard|key | take [NAME] | trap I KIND|none | odds KIND N [LEVEL] | sprung]",
 		"dd chars [clock S | lockat N|none | NAME list|play I|new|code|enter CODE|unlink I|pcs]",
