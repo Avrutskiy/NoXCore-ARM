@@ -161,14 +161,14 @@ if(NOX_BUILD_SDL)
     FetchContent_MakeAvailable(stb_truetype noto_sans noto_sans_license caudex caudex_license)
 
     # UPnP (noxsdl port_mapper.cpp): miniupnpc (BSD), static, to open a hosted game's port on the
-    # router.
+    # router. Keep the pinned release archive in the checkout so configure can run offline.
     set(UPNPC_BUILD_STATIC ON CACHE BOOL "" FORCE)
     set(UPNPC_BUILD_SHARED OFF CACHE BOOL "" FORCE)
     set(UPNPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(UPNPC_BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
     set(UPNPC_NO_INSTALL ON CACHE BOOL "" FORCE)
     FetchContent_Declare(miniupnpc
-        URL https://miniupnp.tuxfamily.org/files/miniupnpc-2.3.3.tar.gz
+        URL "${CMAKE_CURRENT_LIST_DIR}/miniupnpc-2.3.3.tar.gz"
         URL_HASH SHA256=D52A0AFA614AD6C088CC9DDFF1AE7D29C8C595AC5FDD321170A05F41E634BD1A
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )

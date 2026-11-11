@@ -54,7 +54,7 @@ endforeach()
 # a target dependency would create a cycle through noxsdl's SPIR-V generators.
 add_custom_target(nox_metal_shaders DEPENDS ${metal_sources})
 target_sources(noxsdl PRIVATE ${metal_sources})
-set(NOX_MAC_VERSION 0.1.1)
+set(NOX_MAC_VERSION 0.1.2)
 configure_file("${mac}/Info.plist.in" "${output}/Info.plist" @ONLY)
 add_custom_target(noxsdl_bundle
     COMMAND "${CMAKE_COMMAND}" "-DEXECUTABLE=$<TARGET_FILE:noxsdl>"
