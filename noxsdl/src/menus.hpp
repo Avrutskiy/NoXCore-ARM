@@ -159,6 +159,14 @@ public:
     void showMainMenu();
     /// Straight to the game browser (main menu and online / network on the back stack).
     void showGameBrowser();
+    /// (Tests: --fake-wol-chat) The chat lobby as a login leaves it, with made-up lobbies, users and
+    /// lines and no connection to XWIS: the screen to look at.
+    void showFakeChat();
+    /// (Tests: --fake-xwis-games) Westwood Online's game list after Skip Login, its XWIS games
+    /// `games` (no listing login), pinged as XWIS's are.
+    void showFakeXwisGames(std::vector<nox::lobby::GameListing> games);
+    /// (Tests: --fake-wol-connecting) The login with its "Connecting..." dialog up, no connection.
+    void showFakeConnecting();
     /// A notice over the screen (Gui_Dialog_Create with flags 0x21: OK), its title and text string
     /// ids ("Noxworld.c:Notification", "Noxworld.c:Timeout": Gui_ShowTimeoutNotice's).
     void notice(const std::string& titleId, const std::string& textId);
@@ -288,6 +296,11 @@ private:
     void enable(gui::Window* top, std::int32_t id, bool on);
     /// A button that isn't hooked up yet: disabled, " - WIP" after its text.
     void wip(gui::Window* top, std::int32_t id);
+    /// A Westwood Online screen (wolapi.wnd, wolchat.wnd) loaded as gui_.load does, its large text
+    /// drawn smaller (wol_screens.hpp).
+    gui::Window* loadWolScreen(const char* file, gui::Proc proc);
+    /// How many of the login list's lines show at once (at its font's size).
+    int loginLinesShown();
     /// Chosen a game: pick the character to join as (as noxworld's Join, windowMultiplayerSub).
     void chooseCharacter(const std::string& host);
     /// A game clicked in the list (client_gui_serverInfoBlockCheckExp):
@@ -327,6 +340,11 @@ private:
     void dialog(const std::string& title, const std::string& text, std::uint32_t flags,
                 std::function<void()> onOk, std::function<void()> onCancel = {}, const std::string& yesText = {},
                 const std::string& noText = {});
+    /// The same for the Westwood Online screens (the login, the chat, the logging in and off): its
+    /// large text at their size (wol_screens.hpp), the title's box grown down to its lines so a
+    /// long title wraps inside the dialog.
+    void wolDialog(const std::string& title, const std::string& text, std::uint32_t flags, std::function<void()> onOk,
+                   std::function<void()> onCancel = {});
     /// noxcpp's Host Custom (the Host Quest button, 0x2713): modeList's, hosted for others. Hosting
     /// picks a character for it (the Map Editor's, then its session dialog: kHostEditGame).
     void hostCustom();
@@ -442,6 +460,8 @@ private:
     int wolState_ = 0;            ///< the WOL state: 7 the chat, 8 the game list; 0 neither
     bool wolMode_ = false;        ///< the game list came from the chat (back to it after a game)
     bool lanOnly_ = true;         ///< the game list is Network's (lanOnly())
+    /// (Tests: --fake-xwis-games) Westwood Online's list's XWIS games, instead of a listing login.
+    std::optional<std::vector<nox::lobby::GameListing>> fakeXwisGames_;
     /// A list to ask the connection for once it's logged in (kWolAllChannels: the chat's; the
     /// game code: the game list's).
     std::optional<int> wolListWanted_;

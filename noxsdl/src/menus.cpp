@@ -7,6 +7,7 @@
 #include "console.hpp"
 #include "menu_rules.hpp"
 #include "mode_ui.hpp"
+#include "wol_screens.hpp"
 
 #include "noxcore/client/solo_menu.hpp"
 #include "noxcore/client/spell_bars.hpp"
@@ -41,8 +42,6 @@ constexpr std::int32_t kOptions = 151, kBack = 152;
 // wolapi.wnd
 constexpr std::int32_t kLoginName = 1701, kLoginPassword = 1702, kLoginSave = 1703, kLoginSkip = 1705,
                        kLoginGo = 1706, kLoginList = 1708, kLoginSlider = 1709, kLoginUp = 1710, kLoginDown = 1711;
-/// How many of the login list's lines show at once (79 high, less its title line, 11 a line).
-constexpr int kLoginLinesShown = 6;
 // noxworld.wnd
 constexpr std::int32_t kWorldListPanel = 10033, kWorldGameList = 10037, kWorldMap = 10020, kWorldMapQuads = 10021,
                        kHost = 10002, kHostQuest = 10003, kList = 10004, kFilters = 10005, kRefresh = 10006,
@@ -165,6 +164,24 @@ void Menus::wip(gui::Window* top, std::int32_t id)
         enable(top, id, false);
         w->text += " - WIP";
     }
+}
+
+gui::Window* Menus::loadWolScreen(const char* file, gui::Proc proc)
+{
+    // The Westwood Online screens' large text at kLargeScale of its size (wol_screens.hpp).
+    gui::Window* top = gui_.load(windowDir_ / file, std::move(proc));
+    gui::scaleLargeFont(*top, wol_screens::kLargeScale);
+    return top;
+}
+
+int Menus::loginLinesShown()
+{
+    // As many as the list's box holds at its font's line.
+    const gui::Window* list = screen_ ? screen_->find(kLoginList) : nullptr;
+    if (!list) {
+        return 1;
+    }
+    return wol_screens::linesShown(list->rect.h, !list->text.empty(), gui::fontLine(*list), gui::listLineHeight(*list));
 }
 
 void Menus::reset()
@@ -417,8 +434,8 @@ void Menus::enter(State s)
         optsBack_->show(true);
         break;
     case State::Login:
-        // The login: from 480 above.
-        screen_ = gui_.load(windowDir_ / "wolapi.wnd", [this](gui::Window&, int message, gui::Window& from) {
+        // The login: from 480 above, its large text smaller (wol_screens.hpp).
+        screen_ = loadWolScreen("wolapi.wnd", [this](gui::Window&, int message, gui::Window& from) {
             return onLogin(message, from);
         });
         slides_.push_back(gui_.slideIn(screen_, {0, -480}, {0, 20}, {0, -40}));
@@ -901,7 +918,7 @@ void Menus::setupLogin()
     // Its slider's thumb (with UISlider / UISliderLit).
     gui::useSliderThumb(screen_->find(kLoginSlider));
     selectLogin(std::max(pick, 0));
-    scrollLogins(std::max(pick - kLoginLinesShown / 2, 0));
+    scrollLogins(std::max(pick - loginLinesShown() / 2, 0));
     // Register: XWIS makes an account on its first login, so it's our way to go on without one.
     if (gui::Window* skip = screen_->find(kLoginSkip)) {
         skip->text = "Skip Login";
@@ -910,16 +927,16 @@ void Menus::setupLogin()
     if (gui::Window* go = screen_->find(kLoginGo)) {
         go->tooltip = "Log in to XWIS (a new name makes a new account with this password)";
     }
-    // Ours: how to log in to XWIS, across the top, over the screen's background.
-    screen_->draw = [](gui::Window& w, gui::Painter& p) {
-        const SDL_Point pos = w.screenPos();
-        p.image(w.backgroundImage, pos.x + w.imageOffset.x, pos.y + w.imageOffset.y);
-        static const std::string kHow =
-            "Log in with your XWIS account. A new name becomes your account with the password you type; for a "
-            "name registered at xwis.net, use the game password from xwis.net/ga. Skip Login plays without one.";
-        p.fillAlpha(pos.x + 36, pos.y + 29, 568, 26, {0, 0, 0, 170});
-        p.text(kHow, pos.x + 42, pos.y + 31, false, w.textColor, 556);
-    };
+    // Ours: how to log in to XWIS, in the default face at the top of the screen's empty panel on the
+    // right (its black box; its border is drawn over it after).
+    if (gui::Window* panel = screen_->find(wol_screens::kLoginHelpPanel)) {
+        panel->draw = [textColor = screen_->textColor](gui::Window& w, gui::Painter& p) {
+            const SDL_Point pos = w.screenPos();
+            p.fill(pos.x, pos.y, w.rect.w, w.rect.h, w.backgroundColor);
+            constexpr int in = wol_screens::kLoginHelpInset;
+            p.text(std::string(wol_screens::kLoginHelp), pos.x + in, pos.y + in, false, textColor, w.rect.w - 2 * in);
+        };
+    }
 }
 
 void Menus::selectLogin(int slot)
@@ -950,7 +967,7 @@ void Menus::scrollLogins(int first)
     if (!list) {
         return;
     }
-    const int most = std::max(0, static_cast<int>(list->lines.size()) - kLoginLinesShown);
+    const int most = std::max(0, static_cast<int>(list->lines.size()) - loginLinesShown());
     list->scroll = std::clamp(first, 0, most);
     // The slider (DATA 0-128, its maximum at the top) follows.
     if (gui::Window* slider = screen_->find(kLoginSlider)) {
@@ -968,7 +985,7 @@ bool Menus::onLogin(int message, gui::Window& from)
         gui::Window* list = screen_->find(kLoginList);
         const auto* sl = std::get_if<nox::gui::SliderData>(&from.data);
         if (list && sl) {
-            const int most = std::max(0, static_cast<int>(list->lines.size()) - kLoginLinesShown);
+            const int most = std::max(0, static_cast<int>(list->lines.size()) - loginLinesShown());
             list->scroll = gui::scrollFromSlider(*sl, from.sliderValue, most);
         }
         return true;
@@ -1022,11 +1039,11 @@ void Menus::startLogin()
     const std::string typed = password ? nox::strings::toUtf8(password->entry) : std::string();
     const std::string title = gui_.text("wolpatch.c:LoginFailed");
     if (nick.empty()) {
-        dialog(title, gui_.text("Wolreg.c:ErrNoNick"), 1, {});
+        wolDialog(title, gui_.text("Wolreg.c:ErrNoNick"), 1, {});
         return;
     }
     if (!std::isalpha(static_cast<unsigned char>(nick.front()))) {
-        dialog(title, gui_.text("Wolreg.c:ErrNickFirstLetter"), 1, {});
+        wolDialog(title, gui_.text("Wolreg.c:ErrNickFirstLetter"), 1, {});
         return;
     }
     // No password is allowed, as in the game: WOLAPI encodes the empty one like any other
@@ -1062,7 +1079,7 @@ void Menus::startLogin()
     wol_.emplace(pendingLogin_.nick, pendingLogin_.password, static_cast<std::uint32_t>(nowMs_));
     wolLoggingIn_ = true;
     // "Connecting...", with Cancel.
-    dialog(gui_.text("WolProg.wnd:Connecting"), gui_.text("Wolchat.c:PleaseWait"), 2, {}, [this] {
+    wolDialog(gui_.text("WolProg.wnd:Connecting"), gui_.text("Wolchat.c:PleaseWait"), 2, {}, [this] {
         wol_.reset();
         wolLoggingIn_ = false;
     });
@@ -1087,7 +1104,7 @@ void Menus::loginDone()
             const auto colon = done.error().find(" :");
             why = colon != std::string::npos ? done.error().substr(colon + 2) : done.error();
         }
-        dialog(gui_.text("wolpatch.c:LoginFailed"), why, 1, {});
+        wolDialog(gui_.text("wolpatch.c:LoginFailed"), why, 1, {});
         return;
     }
     SDL_Log("XWIS: logged in as %s", pendingLogin_.nick.c_str());
@@ -1662,6 +1679,21 @@ void Menus::dialog(const std::string& title, const std::string& text, std::uint3
     gui_.setModal(dialog_);
 }
 
+void Menus::wolDialog(const std::string& title, const std::string& text, std::uint32_t flags, std::function<void()> onOk,
+                      std::function<void()> onCancel)
+{
+    dialog(title, text, flags, std::move(onOk), std::move(onCancel));
+    gui::scaleLargeFont(*dialog_, wol_screens::kLargeScale);
+    // The title's box (15 high, 2 below the dialog's top) as tall as its lines: centred in it, a
+    // title that wraps grows down, not up past the dialog's edge. (Measured a twentieth narrower
+    // than it's drawn: the size drawn at is a whole number of output pixels.)
+    if (gui::Window* t = dialog_->find(kDlgTitle)) {
+        gui::Painter p(nullptr, gui_.resources(), 640, 480);
+        p.setLargeScale(t->largeScale);
+        t->rect.h = std::max(t->rect.h, p.textHeight(t->text, t->largeFont, t->rect.w * 19 / 20));
+    }
+}
+
 std::string Menus::modeHostKey(std::string_view modeId, bool local)
 {
     return std::string(local ? "@solomode:" : "@hostnetmode:") + std::string(modeId);
@@ -1769,7 +1801,7 @@ void Menus::join(const nox::client::PlayerProfile& profile)
         // game posts itself with the same login), the join once the server has closed it.
         joinAfterLogOff_ = profile;
         logOffWol();
-        dialog(gui_.text("Wolchat.c:PleaseWait"), gui_.text("WolChat.c:LoggingOff"), 0, {});
+        wolDialog(gui_.text("Wolchat.c:PleaseWait"), gui_.text("WolChat.c:LoggingOff"), 0, {});
         return;
     }
     if (callbacks_.join && !pendingHost_.empty()) {

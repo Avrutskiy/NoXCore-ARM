@@ -438,10 +438,13 @@ void BrowserScreen::drawRows(SDL_Renderer* renderer, SDL_FRect area, const Layou
     const float x0 = area.x;
     const float w = area.w;
 
-    // Columns: name, map, mode, players, ping, where it was found.
-    // (From has the most room after the name's: "NoX Core XWIS LAN" and the padlock beside it. Mode
-    // has a little more than Map, whose names are 8 letters at most: a mode's own name, "Undead Tide".)
-    const float cols[6] = {x0, x0 + w * 0.35f, x0 + w * 0.47f, x0 + w * 0.61f, x0 + w * 0.71f, x0 + w * 0.80f};
+    // Columns: name, map, mode, players, ping, where it was found (mode_column.hpp), each column's
+    // text cut a gap short of the next (a share of the line, so it holds at every size).
+    float cols[6];
+    for (int i = 0; i < 6; ++i) {
+        cols[i] = x0 + w * mode_column::kColumnStarts[i];
+    }
+    const float gap = mode_column::columnGap(font_.lineHeight(l.size));
     const char* headers[6] = {"Name", "Map", "Mode", "Players", "Ping", "From"};
     const float headerY = l.top - l.rowHeight;
     // The headers a quarter larger in a plain face (Caudex); the Nox-style fonts keep the game's one
@@ -458,15 +461,23 @@ void BrowserScreen::drawRows(SDL_Renderer* renderer, SDL_FRect area, const Layou
     const float lockSize = std::round(font_.lineHeight(l.size) * 0.95f);
     const float lockRoom = lockSize + 4;
 
-    // A column's text, cut to fit before the next one (with `after`, cut to leave room for it,
-    // drawn after it in `afterColor`).
+    // A column's text, cut to fit before the next one, "..." where it was cut (with `after`, cut to
+    // leave room for it, drawn after it in `afterColor`).
     const auto cell = [&](int column, const std::string& s, float ty, SDL_Color c, const std::string& after = {},
                           SDL_Color afterColor = {}) {
-        const float room = (column < 5 ? cols[column + 1] : x0 + w - lockRoom) - cols[column] - 4;
+        const float room = (column < 5 ? cols[column + 1] : x0 + w - lockRoom) - cols[column] - gap;
         const float afterWidth = after.empty() ? 0.0f : font_.measure(after, l.size);
         std::string shown = s;
-        while (!shown.empty() && font_.measure(shown, l.size) > room - afterWidth) {
-            shown.pop_back();
+        if (font_.measure(shown, l.size) > room - afterWidth) {
+            const float dots = font_.measure("...", l.size);
+            while (!shown.empty() && (font_.measure(shown, l.size) + dots > room - afterWidth || shown.back() == ' ')) {
+                // (a whole UTF-8 character: its continuation bytes, then its lead)
+                while (shown.size() > 1 && (static_cast<unsigned char>(shown.back()) & 0xC0) == 0x80) {
+                    shown.pop_back();
+                }
+                shown.pop_back();
+            }
+            shown += "...";
         }
         font_.draw(shown, cols[column], ty, l.size, c);
         if (!after.empty()) {
@@ -492,10 +503,12 @@ void BrowserScreen::drawRows(SDL_Renderer* renderer, SDL_FRect area, const Layou
             SDL_RenderFillRect(renderer, &bar);
         }
         const float ty = y + (l.rowHeight - font_.lineHeight(l.size)) / 2;
-        if (!e.answered) {
+        // A listed address that didn't answer (or didn't resolve): its name and why; a game XWIS or the
+        // LAN listed is drawn from its listing below, answered or not (mode_column.hpp's statusRow).
+        if (mode_column::statusRow(e)) {
             cell(0, g.name.empty() ? rowKey(e) : g.name, ty, text);
             font_.draw(statusText(e), cols[1], ty, l.size, grey);
-            cell(5, isSaved(e) ? "Saved" : "list", ty, grey);
+            cell(5, mode_column::fromText(e, isSaved(e)), ty, grey);
             continue;
         }
         // Unnamed listings show their address instead.
@@ -537,26 +550,13 @@ void BrowserScreen::drawRows(SDL_Renderer* renderer, SDL_FRect area, const Layou
         // (A NoX Core mode's own name when its host gave one, the game flags' otherwise; whole
         // words kept when it's too wide: mode_column.hpp.)
         cell(2,
-             mode_column::fitModeText(mode_column::modeText(e), cols[3] - cols[2] - 4,
+             mode_column::fitModeText(mode_column::modeText(e), cols[3] - cols[2] - gap,
                                       [&](const std::string& s) { return font_.measure(s, l.size); }),
              ty, text);
         cell(3, std::to_string(g.players) + "/" + std::to_string(g.maxPlayers), ty, text);
         cell(4, e.pingMs ? std::to_string(*e.pingMs) + " ms" : "-", ty, pingColor(e.pingMs));
-        // `sources` is a bitmask of every place the game was found (it can be several).
-        std::string from;
-        if (e.extended) {
-            from += "NoX Core ";
-        }
-        if (e.sources & nox::lobby::kFromXwis) {
-            from += "XWIS ";
-        }
-        if (e.sources & nox::lobby::kFromLan) {
-            from += "LAN ";
-        }
-        if (e.sources & nox::lobby::kFromList) {
-            from += isSaved(e) ? "Saved" : "list";
-        }
-        cell(5, from, ty, grey);
+        // Where it was found (mode_column.hpp's fromText: the first of XWIS, the LAN, the lists).
+        cell(5, mode_column::fromText(e, isSaved(e)), ty, grey);
         if (g.access == nox::lobby::GameAccess::Password) {
             drawLock(renderer, x0 + w - lockSize / 2 - 1, y + l.rowHeight / 2, lockSize);
         }
