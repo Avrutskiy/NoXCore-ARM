@@ -2126,8 +2126,18 @@ void GameHost::onIncomingClient(std::uint8_t peer)
 }
 
 // TEXT_MESSAGE (SrvNet_OnPacket 0xA8): a chat line, relayed; noxcpp's chat commands read from it.
-void GameHost::onTextMessage(std::uint8_t peer, std::span<const std::uint8_t> m)
+void GameHost::onTextMessage(std::uint8_t peer, std::span<const std::uint8_t> sent)
 {
+    // (noxcpp's, OB-427 fixed by the owner's decision: a line flagged 8 but not 2 is sized wide
+    // here and narrow by every client, so the stock relay passed the rest of it on as messages of
+    // the sender's making. It goes on as the clients read it: narrow, flag 2 set, cut to its text,
+    // so what comes after it is never anyone's message.)
+    std::vector<std::uint8_t> narrowed;
+    if (sent.size() > 11 && (sent[3] & 0x0A) == 0x08) {
+        narrowed.assign(sent.begin(), sent.begin() + std::min<std::size_t>(sent.size(), 11 + std::size_t{sent[8]}));
+        narrowed[3] |= 0x02;
+    }
+    const std::span<const std::uint8_t> m = narrowed.empty() ? sent : std::span<const std::uint8_t>(narrowed);
     // Relayed as it came (SrvNet_OnPacket 0xA8): not at all while the sender's status
     // has 4 (nothing in the exe sets it); team chat (flag 1) only to the
     // players whose unit is in the team of the object whose net code the line carries
@@ -4663,6 +4673,9 @@ void GameHost::setPlayersCantDie(bool on)
 
 void GameHost::sendVoteAvailable(std::uint8_t peer)
 {
+    if (!transport_.identified(peer)) {
+        return; // (a noxsdl player's alone, as its callers' inVoteWindow asks)
+    }
     transport_.sendReliable(peer, mapvote::availableMessage(voteAvailable()));
 }
 

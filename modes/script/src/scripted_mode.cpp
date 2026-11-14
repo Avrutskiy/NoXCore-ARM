@@ -247,6 +247,36 @@ struct ScriptedMode::Impl {
     /// frames).
     static constexpr std::size_t kRevokesPerFrame = 30;
     std::map<std::string, std::vector<std::array<std::uint8_t, 4>>> revokes;
+    /// (Client level 10) Quiet fills of the bars (nox.putOnBars: kToBars), by player name, each held
+    /// till its player is in play with no revoke owed (flushBarFills, once a frame).
+    static constexpr std::size_t kMaxBarFills = 256;
+    std::map<std::string, std::vector<uimsg::ToBars>> barFills;
+    void flushBarFills()
+    {
+        server::World& world = host->server().world();
+        for (auto it = barFills.begin(); it != barFills.end();) {
+            // (Only to a client that takes kToBars, checked again here: the name may be another
+            // client's by now, or a stock one's of the same name, which must never get it.)
+            const auto who = std::ranges::find_if(host->players(), [&](const auto& e) {
+                return e.second.name == it->first && !host->refused(e.first) &&
+                       (host->clientFeatures(e.first) & lobby::ClientFeature::ModeUi) != 0 && host->clientLevel(e.first) >= uimsg::kToBarsLevel;
+            });
+            if (who == host->players().end()) {
+                it = barFills.erase(it); // (gone, or no longer a client that takes it: let go)
+                continue;
+            }
+            const server::ServerObject* unit = world.byExtent(who->second.extent);
+            const auto owed = revokes.find(it->first);
+            if (!unit || !who->second.ready || (owed != revokes.end() && !owed->second.empty())) {
+                ++it;
+                continue;
+            }
+            for (const uimsg::ToBars& b : it->second) {
+                world.broadcasts().push_back({uimsg::toBarsMessage(b), true, unit->extent});
+            }
+            it = barFills.erase(it);
+        }
+    }
     std::uint32_t revokedAt = ~0u;
     /// nox.lock's: the host's own Closed and allowed list, put back by nox.unlock. `lockChanged`:
     /// since the host last asked (ServerMode::takeLockChanged: a pool opens another lobby).
@@ -2918,6 +2948,49 @@ int noxSetAbility(lua_State* L)
     return 0;
 }
 
+int noxPutOnBars(lua_State* L)
+{
+    // nox.putOnBars(unit, kind, what) -> whether it was sent: a spell ("spell": its name or number)
+    // or an ability ("ability": 1-5) the unit knows (its level on the server above 0) put on its
+    // client's spell bars quietly (kToBars): in the first empty slot where no slot holds it, no book,
+    // sound or sparks. False: not known, or a client that doesn't take it (below client level 10,
+    // ModeUi not named, a held-out or unit-less player): nothing sent.
+    server::ServerObject& u = unitArg(L, 1);
+    const std::string_view kind = luaL_checkstring(L, 2);
+    uimsg::ToBars bars;
+    if (kind == "spell") {
+        const std::size_t s = bookSpellArg(L, 3);
+        if (u.player->spellLevels[s] == 0) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        bars = {uimsg::BarKind::Spell, static_cast<std::uint8_t>(s)};
+    } else if (kind == "ability") {
+        const int a = wholeArg(L, 3, 1, 5, "an ability 1-5");
+        if (u.player->abilityLevel(static_cast<std::size_t>(a)) == 0) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        bars = {uimsg::BarKind::Ability, static_cast<std::uint8_t>(a)};
+    } else {
+        luaL_argerror(L, 2, "\"spell\" or \"ability\"");
+    }
+    Impl& impl = implOf(L);
+    const std::optional<std::uint8_t> peer = peerOfUnit(impl, u.extent);
+    if (!peer || !(impl.host->clientFeatures(*peer) & lobby::ClientFeature::ModeUi) || impl.host->clientLevel(*peer) < uimsg::kToBarsLevel) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    // (Held, by the player's name, till it's in play and every revoke owed to it, nox.revoke's
+    // queue, has gone: so the bars it fills are the ones the revokes left, a slot one of them
+    // empties free for it. Sent at the end of a frame: ScriptedMode::tick.)
+    auto& held = impl.barFills[std::string(impl.host->players().at(*peer).name)];
+    luaL_argcheck(L, held.size() < Impl::kMaxBarFills, 1, "too many bar fills waiting");
+    held.push_back(bars);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int noxGrantCreature(lua_State* L)
 {
     // nox.grantCreature(unit, creature, notify): Plr_AwardFieldGuide, as a found field guide gives
@@ -2994,7 +3067,17 @@ int noxRevoke(lua_State* L)
     const char* name = luaL_checklstring(L, 1, &len);
     luaL_argcheck(L, len <= 64, 1, "a player's name");
     const int kind = wholeArg(L, 2, 0x11, 0x13, "0x11 a spell, 0x12 an ability, 0x13 a field guide's creature");
-    const int what = wholeArg(L, 3, 0, 65535, "its number 0-65535");
+    // (Its number within the game's own tables: the stock client clears the entry it names
+    // unchecked, so one past them would write outside its tables.)
+    constexpr int kSpells = static_cast<int>(std::tuple_size_v<decltype(server::PlayerControl::spellLevels)>);
+    constexpr int kAbilities = static_cast<int>(std::tuple_size_v<decltype(server::PlayerControl::abilityLevels)>);
+    constexpr int kGuide = static_cast<int>(std::tuple_size_v<decltype(server::PlayerControl::fieldGuide)>);
+    static_assert(kSpells == 137 && kAbilities == 6 && kGuide == 41);
+    const int most = (kind == 0x11 ? kSpells : kind == 0x12 ? kAbilities : kGuide) - 1;
+    const int what = wholeArg(L, 3, 0, most,
+                              kind == 0x11   ? "a spell's number 0-136"
+                              : kind == 0x12 ? "an ability's number 0-5"
+                                             : "a field guide creature's number 0-40");
     auto& owed = impl.revokes[std::string(name, len)];
     luaL_argcheck(L, owed.size() < 4096, 1, "too many revokes owed");
     owed.push_back({0xF0, static_cast<std::uint8_t>(kind), static_cast<std::uint8_t>(what), static_cast<std::uint8_t>(what >> 8)});
@@ -3479,7 +3562,13 @@ int noxInformString(lua_State* L)
 {
     // One of the game's lines (a string id: "objcoll.c:FlagNoTeam") to one unit's player.
     server::ServerObject& u = unitArg(L, 1);
-    worldOf(L).broadcasts().push_back({server::informStringBytes(luaL_checkstring(L, 2)), true, u.extent});
+    // (1-48 characters, as SrvNet_SendInformString sends: a stock client looks it up and, when its
+    // table has none, writes it into a fixed buffer.)
+    size_t len = 0;
+    const char* id = luaL_checklstring(L, 2, &len);
+    luaL_argcheck(L, len >= 1 && len <= server::kMaxInformString && std::char_traits<char>::find(id, len, '\0') == nullptr, 2,
+                  "a string id of 1-48 characters");
+    worldOf(L).broadcasts().push_back({server::informStringBytes(std::string_view(id, len)), true, u.extent});
     return 0;
 }
 
@@ -4109,7 +4198,8 @@ void Impl::installToolbox()
         {"gold", noxGold},     {"setGold", noxSetGold}, {"mana", noxMana},       {"setMana", noxSetMana},
         {"setPlayerHealth", noxSetPlayerHealth}, {"strength", noxStrength}, {"setStrength", noxSetStrength},
         {"spellLevel", noxSpellLevel}, {"spells", noxSpells}, {"raiseSpell", noxRaiseSpell}, {"grantSpell", noxGrantSpell},
-        {"abilityLevel", noxAbilityLevel}, {"setAbility", noxSetAbility}, {"fieldGuide", noxFieldGuide}, {"clearBook", noxClearBook},
+        {"abilityLevel", noxAbilityLevel}, {"setAbility", noxSetAbility}, {"putOnBars", noxPutOnBars}, {"fieldGuide", noxFieldGuide},
+        {"clearBook", noxClearBook},
         {"grantCreature", noxGrantCreature}, {"spellId", noxSpellId}, {"guideNumber", noxGuideNumber},
         {"revoke", noxRevoke}, {"sendRevokes", noxSendRevokes}, {"status", noxStatus}, {"gameOverAt", noxGameOverAt},
         {"setGameOverAt", noxSetGameOverAt}, {"exitGate", noxExitGate}, {"rewards", noxRewards}, {"rewardAt", noxRewardAt},
@@ -4554,13 +4644,14 @@ public:
         }
     }
     bool damage(server::Fight&, server::ServerObject& target, server::ServerObject* source, server::ServerObject* weapon, int& amount,
-                int type, server::HitCause cause) override
+                int type, server::HitCause cause, int& wearAs) override
     {
         if (!impl_.parts.events.has().onDamage || impl_.hidden(target) || (source && impl_.hidden(*source))) {
             return true;
         }
         bool hit = true; // (the game's own, whatever goes wrong in the script)
-        impl_.guarded("onDamage", [&] { hit = impl_.parts.events.damage(impl_.vm->thread(), target, source, weapon, amount, type, cause); });
+        impl_.guarded("onDamage",
+                      [&] { hit = impl_.parts.events.damage(impl_.vm->thread(), target, source, weapon, amount, type, cause, wearAs); });
         return hit;
     }
     bool reflect(server::Fight&, server::ServerObject& target, server::ServerObject& missile, bool front) override
@@ -4974,6 +5065,9 @@ void ScriptedMode::tick(server::GameHost& host, std::uint32_t)
     }
     if (impl.parts.anims.active()) {
         impl.parts.anims.step(host); // (and the animations; a dying thing's stopped)
+    }
+    if (!impl.barFills.empty()) {
+        impl.flushBarFills(); // (nox.putOnBars's, each player's once it's in play with no revoke owed)
     }
     impl.pumpUi();
     if (impl.parts.weather.used()) {

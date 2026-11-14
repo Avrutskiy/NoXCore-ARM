@@ -15,14 +15,18 @@
 //          the login if asked and goes on to 1900 with the nick as our account name, the
 //          connection kept. Register is "Skip Login" here (XWIS makes an account on its first
 //          login): on to 10000 without one, joining with no account name (not even a saved
-//          login's) and listing XWIS through a throwaway login. Bots log in their own way (a
+//          login's) and listing XWIS through a throwaway login; a game hosted from there is posted
+//          to XWIS under a generated login (lobby::xwisGuestNick). Bots log in their own way (a
 //          throwaway listing nick), untouched.
 //   1900   the WOL chat lobby (wolchat.c, wolchat.wnd; menus_wolchat.cpp): the lobbies,
 //          one joined, its users and chat; Games goes on to 10000 (listing XWIS through the same
 //          connection), Back logs off to 1700.
 //   10000  the game browser (game_showGameSel, noxworld.wnd): the world map and
 //          its game list are replaced by our game list, drawn in the same frame. Joining a
-//          game goes on to 500 when there are saved characters.
+//          game goes on to 500 when there are saved characters. Joining another's game
+//          (listed, saved or LAN) comes back here with the 1.2b client's "Attempting to
+//          connect" dialog and its Cancel till the host lets us in, or the dialog says why not
+//          (showJoinWait, join_wait.hpp).
 //   500    character select (game_showSelChar, SelChar.wnd): the Save folder's
 //          characters that suit the game (findAutosaves: quest ones for a quest game,
 //          the others otherwise); Load joins the game as the one picked, Delete asks and
@@ -59,6 +63,7 @@
 
 #include "browser_screen.hpp"
 #include "gui.hpp"
+#include "join_wait.hpp"
 #include "mode_list.hpp"
 #include "options_trip.hpp"
 
@@ -179,6 +184,18 @@ public:
     /// typed); OK joins `host` (the game list's game just left) again with `profile` and what was
     /// typed, Cancel stays here.
     void askJoinPassword(const std::string& host, const nox::client::PlayerProfile& profile, bool wrong);
+    /// The join's wait (join_wait.hpp), as the 1.2b client's: the game list (as it was, not fetched
+    /// again) with "Attempting to connect" and its Cancel over it, from the join till the host lets
+    /// us in. Cancel (or Escape) runs `onCancel` (the join dropped), then the game list again.
+    void showJoinWait(std::function<void()> onCancel);
+    /// The wait's words now (join_wait::waiting): the dialog follows when they change.
+    void joinWaitWords(const join_wait::Words& words);
+    /// The join failed while waiting: the dialog says why; OK (or Escape) goes back to the game
+    /// list, fetched again.
+    void joinWaitFailed(const join_wait::Words& words);
+    /// The host let us in: the dialog goes, the game takes over.
+    void endJoinWait();
+    bool joinWaitUp() const noexcept { return joinWaitUp_; }
     /// Where characters are listed from and saved to (default: the game's Save folder).
     void setSaveDir(std::filesystem::path dir) { saveDir_ = std::move(dir); }
     /// The folder a solo game's Save\ is under (default: the game's).
@@ -192,8 +209,11 @@ public:
     /// Whether the player chose Skip Login (since its last login): games are joined with no
     /// account name, and XWIS is listed through a throwaway login.
     bool skippedLogin() const { return skippedLogin_; }
-    /// The WOL login XWIS took (its nick and encoded password), for posting a game we host.
+    /// The WOL login XWIS took (its nick and encoded password): the chat's.
     const std::optional<nox::io::SavedLogin>& wolLogin() const { return wolLogin_; }
+    /// The login a game we host is posted to XWIS under: the WOL login, else Skip Login's
+    /// generated one (lobby::xwisGuestNick, its password the nick); none in Network's list.
+    const std::optional<nox::io::SavedLogin>& hostLogin() const { return wolLogin_ ? wolLogin_ : guestLogin_; }
     /// Whether the game list is Network's (LAN play: no XWIS listed, nothing posted there),
     /// not Westwood Online's (logged in, or Skip Login). --browse's list is Network's.
     bool lanOnly() const { return lanOnly_; }
@@ -409,6 +429,7 @@ private:
     nox::client::PlayerProfile profile_;
     bool skippedLogin_ = false;
     std::optional<nox::io::SavedLogin> wolLogin_;
+    std::optional<nox::io::SavedLogin> guestLogin_; ///< (Skip Login's, for posting a hosted game)
     std::string pendingHost_;
     std::vector<Character> characters_;
     gui::Window* dialog_ = nullptr;
@@ -416,6 +437,14 @@ private:
     /// the one up; true when it took the key.
     std::function<bool(const SDL_KeyboardEvent&)> dialogKeys_;
     std::function<bool(const SDL_Event&)> dialogEvents_; ///< popup scrolling and Escape before the dialog closes
+    /// What Escape does over the dialog up, instead of closing it (the join's: its Cancel or OK).
+    std::function<void()> dialogEscape_;
+    // The join's wait (showJoinWait): its dialog up, its words now, its Cancel's callback.
+    bool joinWaitUp_ = false;
+    join_wait::Words joinWords_;
+    std::function<void()> joinCancel_;
+    bool keepList_ = false; ///< the game list entered as it was, not fetched again (the join's wait)
+    void cancelJoinWait();
     gui::Window* dialogKeysOf_ = nullptr;
     std::string hostModeChosen_; ///< Host Custom's row chosen (mode_list.hpp's modeListKey; none: Quest), kept for next time
     std::string soloModeChosen_; ///< Game Modes' row chosen, the same way

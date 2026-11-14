@@ -1,5 +1,8 @@
-// Finding noxcpp servers in the game list: a query noxsdl's browser sends beside each
-// MSG_SERVER_DISCOVER ping, which only a noxcpp server answers.
+// Finding noxcpp servers in the game list: a query noxsdl's browser sends a server once it has
+// answered its MSG_SERVER_DISCOVER ping, which only a noxcpp server answers. (A GAME.EXE host
+// started from Westwood Online answers no ping, so it's never sent one: nothing of NoX Core's
+// goes to a host that hasn't shown itself, as the 1.2b client sends a listed game nothing before
+// its TRY_JOIN.)
 //
 //   query  00 00 F0 "NXSD" u16 version, u32 token          (browser -> server)
 //          [version 2: u32 the client's feature bits]
@@ -139,7 +142,11 @@ struct ClientSecret {
 ///   9  a script mode's animations (nox.playAnim: MSG_NOXCPP_MODEUI's kAnim, a body drawn in one of
 ///      its own animations for some frames), sent only to a client of level 9 or above that named
 ///      ModeUi (ui_proto.hpp's kAnimLevel); any other draws it as the server's state has it
-inline constexpr std::uint16_t kClientLevel = 9;
+///  10  a script mode's quiet fill of the spell bars (nox.putOnBars: MSG_NOXCPP_MODEUI's kToBars, a
+///      spell or ability its player knows put in the bars' first empty slot where no slot holds it,
+///      with no book, sound or sparks), sent only to a client of level 10 or above that named
+///      ModeUi (ui_proto.hpp's kToBarsLevel); any other is sent nothing (nox.putOnBars says false)
+inline constexpr std::uint16_t kClientLevel = 10;
 /// The client level whose map downloads take the fast send (kClientLevel's list, 4).
 inline constexpr std::uint16_t kFastMapSendLevel = 4;
 /// What a client below a server's lowest level is told (the browser's prompt too), word for word.

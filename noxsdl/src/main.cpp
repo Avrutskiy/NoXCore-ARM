@@ -43,10 +43,13 @@
 #include "command_line.hpp"
 #include "editor/close_plan.hpp"
 #include "editor/editor_settings.hpp"
+#include "editor/editor_text.hpp"
 #include "effects_draw.hpp"
 #include "icon/window_icon.hpp"
+#include "identify_wait.hpp"
 #include "leaving_notice.hpp"
 #include "log_output.hpp"
+#include "map_cache_dir.hpp"
 #include "mods_folder.hpp"
 #include "new_game.hpp"
 #include "predicted_drop.hpp"
@@ -407,13 +410,13 @@ void syncLiveMap(App& app)
             app.minimap->mapLoaded(app.map);
         }
         const auto remembered = std::ranges::count_if(app.view->walls(), [](const nox::map::Wall& w) { return w.unknown != 0; });
-        SDL_Log("map %s (the minimap's memory: %d walls, %d obelisks)", path->string().c_str(), static_cast<int>(remembered),
+        SDL_Log("map %s (the minimap's memory: %d walls, %d obelisks)", editor::pathText(*path).c_str(), static_cast<int>(remembered),
                 app.minimap ? static_cast<int>(app.minimap->obelisksListed()) : 0);
         if (!std::exchange(app.mapDownloaded, false)) {
             chatMapNotice(app);
         }
     } catch (const std::exception& ex) {
-        SDL_Log("loading %s failed: %s", path->string().c_str(), ex.what());
+        SDL_Log("loading %s failed: %s", editor::pathText(*path).c_str(), ex.what());
         app.liveMap = client.mapName(); // don't retry every frame
     }
 }
@@ -1287,6 +1290,25 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         app->minimap->setModifiers(&app->modifiers);
         app->profile = opts.profile;
         app->mapCache = opts.mapCache;
+        if (app->mapCache.empty()) {
+            // (Beside the exe, else the user's settings folder: never the current folder.)
+            fs::path exeDir;
+            if (const char* base = SDL_GetBasePath()) {
+                exeDir = fs::path(reinterpret_cast<const char8_t*>(base));
+            }
+            app->mapCache = defaultMapCache(exeDir, [] {
+                fs::path dir;
+                if (char* pref = SDL_GetPrefPath("noxcpp", "noxsdl")) {
+                    dir = fs::path(reinterpret_cast<const char8_t*>(pref));
+                    SDL_free(pref);
+                }
+                return dir;
+            });
+        }
+        {
+            const auto cache = app->mapCache.u8string();
+            SDL_Log("downloaded maps: %s", reinterpret_cast<const char*>(cache.c_str()));
+        }
         try {
             app->strings =
                 std::make_unique<nox::strings::StringTable>(nox::strings::StringTable::load(gameDir / "nox.csf"));
@@ -1433,7 +1455,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
                     HostSettings settings;
                     if (hostGame) {
                         hostSettingsFromConfig(*app, settings);
-                        settings.wolGame = app->online && app->menus && app->menus->wolLogin();
+                        settings.wolGame = app->online && app->menus && app->menus->hostLogin();
                         settings.map = "So_Druid";
                     }
                     if (host == Menus::kHostQuestGame) {
@@ -1472,16 +1494,23 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
                         app->profile.account.clear();
                         app->soloFromMenus = true;
                     }
+                    if (hostGame) {
+                        // (Local tests: --menu-host-port, --host-loopback; normally the game's port.)
+                        if (app->menuHostPort != 0) {
+                            settings.port = app->menuHostPort;
+                        }
+                        settings.loopbackOnly = app->hostLoopback;
+                    }
                     try {
                         app->host = makeHost(*app, settings);
                         address = app->host->address();
                         SDL_Log("hosting at %s", address.c_str());
                         startPortMapping(*app, hostGame); // (Solo Quest: a LAN game)
-                        // Logged in to XWIS (the game's online, WOL): posted there, as GAME.EXE's
-                        // host's game is. (Solo Quest is a LAN game: not posted.)
+                        // Westwood Online's list (logged in, or Skip Login's generated login): posted
+                        // to XWIS, as GAME.EXE's host's game is. (Solo Quest is a LAN game: not posted.)
                         app->xwisHost.reset();
-                        if (hostGame && app->online && app->menus && app->menus->wolLogin()) {
-                            startXwisPost(*app, *app->menus->wolLogin());
+                        if (hostGame && app->online && app->menus && app->menus->hostLogin()) {
+                            startXwisPost(*app, *app->menus->hostLogin());
                         }
                         SDL_Log("%s", hostListingLog(menusHostListing(*app, hostGame), "hosting", app->host->port()).c_str());
                     } catch (const std::exception& ex) {
@@ -1490,8 +1519,28 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
                     }
                 }
                 SDL_Log("joining %s, account: %s", address.c_str(), app->profile.account.empty() ? "(none)" : app->profile.account.c_str());
+                if (!app->host && app->browser && joinWaitsForPing(app->browser->entryFor(address))) {
+                    // An XWIS game whose ping is still out ("Checking..."): its session starts once
+                    // the ping has answered or given up (joinWaitFrame, PingWait), so how it's
+                    // joined (stock-shaped or asked first) is known; the join's dialog up meanwhile.
+                    app->pingWaitHost = address;
+                    app->pingWaitStartedAt = static_cast<std::uint32_t>(SDL_GetTicks());
+                    SDL_Log("join: %s's ping is still out: the join waits for it (at most %u ms)", address.c_str(),
+                            PingWait::kMaxMs);
+                    app->joinWaiting = true;
+                    app->joinWaitShow = true;
+                    return;
+                }
                 startLive(*app, address);
                 notePortMoved(*app);
+                if (!app->host) {
+                    // Another's game (listed, saved or LAN): the menus stay up with the 1.2b
+                    // client's "Attempting to connect" and its Cancel till the host lets us in
+                    // (joinWaitFrame). Our own game is joined at once, as the exe's host's is.
+                    gui::setShellUp(true);
+                    app->joinWaiting = true;
+                    app->joinWaitShow = true;
+                }
             };
             callbacks.solo = [app](const Menus::SoloStart& start) {
                 // The main menu's Solo: our own solo game (as --solo), its character the one the
@@ -1567,8 +1616,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
                     app->host = makeHost(*app, settings);
                     startPortMapping(*app, !app->hostLoopback);
                     app->xwisHost.reset();
-                    if (app->online && app->menus && app->menus->wolLogin()) {
-                        startXwisPost(*app, *app->menus->wolLogin());
+                    if (app->online && app->menus && app->menus->hostLogin()) {
+                        startXwisPost(*app, *app->menus->hostLogin());
                     }
                 } catch (const std::exception& ex) {
                     SDL_Log("%s: %s", how.logTag.c_str(), ex.what());
@@ -2361,7 +2410,7 @@ std::string hostEditSession(App& app, const editor::SessionSetup& setup, std::ui
     s.mapCycle = false;
     s.mapVote = false;
     s.testCommands = true;
-    s.wolGame = listed && app.online && app.menus && app.menus->wolLogin();
+    s.wolGame = listed && app.online && app.menus && app.menus->hostLogin();
     nox::server::EditSessionDirector::Options o;
     o.mapsDir = mapsDir;
     o.mapName = setup.name;
@@ -2399,7 +2448,7 @@ std::string hostEditSession(App& app, const editor::SessionSetup& setup, std::ui
     if (listed) {
         startPortMapping(app, true);
         if (where.where == HostListing::Where::Xwis) {
-            startXwisPost(app, *app.menus->wolLogin());
+            startXwisPost(app, *app.menus->hostLogin());
         }
     } else {
         app.online = false;
@@ -2939,7 +2988,7 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
             app->input->releaseAll();
         }
         app->options->handleEvent(*event, app->camera.viewWidth, app->camera.viewHeight);
-        if (app->menus && !app->live && app->menus->optionsUp() &&
+        if (app->menus && (!app->live || app->joinWaiting) && app->menus->optionsUp() &&
             (event->type == SDL_EVENT_MOUSE_MOTION || event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
              event->type == SDL_EVENT_MOUSE_BUTTON_UP)) {
             // The menus' Options screen: the bar below the window (its Back) has the mouse too.
@@ -2947,7 +2996,7 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
         }
         return SDL_APP_CONTINUE;
     }
-    if (app->menus && !app->live) {
+    if (app->menus && (!app->live || app->joinWaiting)) { // (the join's wait: the menus have the input)
         if (event->type == SDL_EVENT_QUIT) {
             return SDL_APP_SUCCESS;
         }
@@ -3313,7 +3362,7 @@ void layoutView(App& app, bool embedded)
         const float oh = static_cast<float>(app.camera.viewHeight);
         app.gameArea = SDL_FRect{0, 0, ow, oh};
         app.letterboxed = false;
-        if (app.live && app.viewWidth > 0 && app.viewHeight > 0) {
+        if (app.live && !app.joinWaiting && app.viewWidth > 0 && app.viewHeight > 0) { // (the join's wait: the menus')
             const float fit = std::min(ow / static_cast<float>(app.viewWidth), oh / static_cast<float>(app.viewHeight));
             const float w = std::min(ow, std::round(static_cast<float>(app.viewWidth) * fit));
             const float h = std::min(oh, std::round(static_cast<float>(app.viewHeight) * fit));
@@ -3373,8 +3422,8 @@ SDL_AppResult menusFrame(App& app, bool shotReady)
     if (app.quitRequested) {
         return SDL_APP_SUCCESS;
     }
-    if (app.live) {
-        return SDL_APP_CONTINUE; // a game was just chosen
+    if (app.live && !app.joinWaiting) {
+        return SDL_APP_CONTINUE; // a game was just chosen (another's: the join's wait from the next frame)
     }
     beginFrame(app);
     SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
@@ -3558,11 +3607,24 @@ void updateGameWindows(App& app)
     }
 }
 
+/// How a join's wait ended (joinWaitFrame), for gameLeft: not one (a game left), failed (its dialog
+/// says why, over the game list it's up over), or its Cancel (the menus go back to the list).
+enum class JoinWaitEnd : std::uint8_t { None, Failed, Cancelled };
+
 /// The game left (or never joined): its windows closed, a game we hosted retired, and back to the
 /// menus' game list or main menu with the notice of why; without the menus (or after a
-/// screenshot) the program's end.
-SDL_AppResult gameLeft(App& app)
+/// screenshot) the program's end. A join's wait that ended (`joinEnd`): the game list is up
+/// already, its dialog says why (join_wait.hpp).
+SDL_AppResult gameLeft(App& app, JoinWaitEnd joinEnd = JoinWaitEnd::None)
 {
+    app.joinWaiting = false;
+    app.joinWaitShow = false;
+    if (joinEnd == JoinWaitEnd::Cancelled) {
+        SDL_Log("join: cancelled (the dialog's Cancel)");
+    }
+    // (the join's dialog's words for why it failed, read before the session goes)
+    const std::optional<join_wait::Words> joinFailure =
+        joinEnd == JoinWaitEnd::Failed ? join_wait::failure(app.live->client()) : std::nullopt;
     if (app.quitMenu) {
         app.quitMenu->close();
     }
@@ -3613,7 +3675,9 @@ SDL_AppResult gameLeft(App& app)
         } else if (askPassword) {
             couldNot = "Couldn't join " + app.liveHost + (wrongPassword ? ": the password was wrong" : ": it asks for a password");
         }
-        app.browser->setMessage(failed && endReason == EndReason::None ? couldNot : "Left " + app.liveHost);
+        app.browser->setMessage(joinEnd == JoinWaitEnd::Cancelled                ? std::string()
+                                : failed && endReason == EndReason::None ? couldNot
+                                                                         : "Left " + app.liveHost);
         saveBars(app);
         app.book.reset();
         app.cinematics.reset();
@@ -3637,6 +3701,30 @@ SDL_AppResult gameLeft(App& app)
         }
         app.xwisHost.reset(); // (the game off XWIS's list: PART, QUIT)
         gui::setShellUp(true); // (cliWaitForJoinData)
+        if (joinEnd != JoinWaitEnd::None) {
+            // The join's wait over: the game list is up under its dialog. Cancel's goes back to the
+            // list itself (Menus::cancelJoinWait); a failure's dialog says why, as the 1.2b client's
+            // join dialog turns to it, OK back to the list; the password's and a newer NoX Core's
+            // over the list as before; any other, the list again with the line of why.
+            if (joinEnd == JoinWaitEnd::Failed) {
+                if (tooOldNotice) {
+                    app.menus->endJoinWait();
+                    app.menus->tooOldNotice();
+                } else if (askPassword) {
+                    app.menus->endJoinWait();
+                    app.menus->askJoinPassword(app.liveHost, app.profile, wrongPassword);
+                } else if (joinFailure) {
+                    app.menus->joinWaitFailed(*joinFailure);
+                } else {
+                    app.menus->endJoinWait();
+                    app.menus->showGameBrowser();
+                }
+            }
+            handMouseTo(app, MouseOwner::Menus);
+            app.logMenuPointer = true;
+            SDL_StartTextInput(app.window);
+            return SDL_APP_CONTINUE;
+        }
         if (std::exchange(app.soloFromMenus, false)) {
             // A solo game's end: its host gone, back to the main menu (the screens' state
             // codes were dropped as the game started: windowSelCharProc).
@@ -3661,6 +3749,60 @@ SDL_AppResult gameLeft(App& app)
         return SDL_APP_CONTINUE;
     }
     return failed ? SDL_APP_FAILURE : SDL_APP_SUCCESS;
+}
+
+/// A frame of a join's wait (join_wait.hpp): the session pumped, the menus drawn with the 1.2b
+/// client's join dialog over the game list (its words as the join goes: attempting, the host's ping
+/// test, connected); a failure ends it with its dialog (gameLeft); once the host has let us in, the
+/// game's frame as before (none returned).
+std::optional<SDL_AppResult> joinWaitFrame(App& app, bool shotReady)
+{
+    if (std::exchange(app.joinWaitShow, false)) {
+        app.menus->showJoinWait([&app] {
+            if (app.live) {
+                gameLeft(app, JoinWaitEnd::Cancelled);
+                return;
+            }
+            // (Cancel while the game's ping was still out: no session yet, nothing to close.)
+            SDL_Log("join: cancelled (the dialog's Cancel) while %s's ping was out", app.pingWaitHost.c_str());
+            app.pingWaitHost.clear();
+            app.joinWaiting = false;
+        });
+    }
+    if (!app.live) {
+        // The wait for an XWIS game's ping (PingWait): the game list kept polling under the
+        // dialog; the session once the ping has answered or given up, or at the browser's own
+        // give-up time.
+        if (app.pingWaitHost.empty()) {
+            app.joinWaiting = false; // (nothing to wait for)
+            return menusFrame(app, shotReady);
+        }
+        const PingWait wait{app.pingWaitStartedAt};
+        const auto now = static_cast<std::uint32_t>(SDL_GetTicks());
+        const auto step = wait.step(app.browser ? app.browser->entryFor(app.pingWaitHost) : nullptr, now);
+        if (step == PingWait::Step::Wait) {
+            return menusFrame(app, shotReady);
+        }
+        const std::string host = std::exchange(app.pingWaitHost, {});
+        SDL_Log("join: %s's ping: %s after %u ms; joining", host.c_str(), PingWait::name(step), now - wait.startedAt);
+        startLive(app, host);
+        gui::setShellUp(true); // (the join's dialog stays up: the menus' till the host lets us in)
+    }
+    app.live->update();
+    if (app.live->done()) {
+        gameLeft(app, JoinWaitEnd::Failed);
+        return menusFrame(app, shotReady);
+    }
+    const auto& client = app.live->client();
+    if (join_wait::stillWaiting(client)) {
+        app.menus->joinWaitWords(join_wait::waiting(client));
+        return menusFrame(app, shotReady);
+    }
+    // In (the connection up): the dialog goes and the game takes over, its windows small.
+    app.joinWaiting = false;
+    app.menus->endJoinWait();
+    gui::setShellUp(false);
+    return std::nullopt;
 }
 
 /// This frame's input to the server: facing the cursor or moving to it, Action held, the spells' target
@@ -4058,6 +4200,12 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     std::vector<HealthBar> healthBars;
     std::set<std::uint32_t> liveCodes;
     bool shotReady = !app->screenshot.empty() && !app->shotTaken && !embedded; // (in the editor's panel: the editor's shot)
+    if (app->menus && app->joinWaiting && (app->live || !app->pingWaitHost.empty())) {
+        // (the join's wait: for the host, or before it for an XWIS game's ping)
+        if (const auto result = joinWaitFrame(*app, shotReady)) {
+            return *result;
+        }
+    }
     if (app->menus && !app->live) {
         return menusFrame(*app, shotReady);
     }

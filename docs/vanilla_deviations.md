@@ -155,6 +155,62 @@ What follows from it:
 - **Risk:** low; the server decoder accepts 0xBE at any time (it only advances past it).
 - **Revert:** remove the keep-alive block in `gameFrame`.
 
+### VD-74: Every game tells a player's health and mana changes at once, Westwood Online games too
+
+- **Vanilla:** in a Westwood Online game, the server tells a player a change of their health (or
+  mana) only when it is a tenth of the most or more, or when more than 7 frames have passed since
+  the last one it told; smaller changes wait. LAN games tell every change.
+- **Ours:** every change is told at once, in every game (noxcore/src/server/game_host.cpp,
+  GameHost::sendReports).
+- **Why:** by the owner's decision, 2026-11-13: the throttle saved bandwidth on the connections of
+  its day, which today's don't need. It matters more since a game hosted after Skip Login is a
+  Westwood Online game too (VD-38).
+- **Risk:** low: a stock client in a Westwood Online game gets up to about eight times the health
+  and mana messages while they change a point at a time, and its bars move as smoothly as in a
+  LAN game.
+- **Revert:** in sendReports, in a Westwood Online game, hold a health or mana change until it is a
+  tenth of the most or more than 7 frames have passed since the last one told.
+
+### VD-73: Continual Replenishment keeps a staff's charge percent with its charges (OB-429)
+
+- **Vanilla:** Continual Replenishment adds a charge to a wand or staff every so many frames but
+  leaves its charge percent where the last spend put it. An obelisk's recharge sets the charges to
+  most x percent / 100 whenever that differs from the charges held, so a staff that had refilled
+  itself drops back to a handful of charges near an obelisk with mana in it, then climbs again.
+- **Ours:** the percent is set from the charges each time Replenishment adds one
+  (noxcore/src/server/item_effects.cpp, ContinualReplenishmentUpdate), as every spend sets it, so
+  the obelisk sees the staff as it is and never lowers its charges.
+- **Why:** by the owner's decision, 2026-11-13 ("fix it and note it as an original bug"). Delve and
+  Undead Tide rewards can put Replenishment1 on a staff.
+- **Risk:** none known: only the percent changes, and only on items with Continual Replenishment.
+  A stock client is told the charges as before (MSG_REPORT_CHARGES). What follows from it: an
+  obelisk no longer spends its mana on such a staff once it has refilled itself (its percent is
+  100), and a shop's repair or an item's respawn, which fill the charges, leave it as they find it.
+- **Revert:** remove the percent update after `item->charges = now` in ContinualReplenishmentUpdate.
+
+### VD-72: Downloaded maps go to NoX Core's own noxsdl_maps folder, never the game's maps folder
+
+- **Vanilla:** a map the host sends (the server's map not found in the game's maps folder, or found
+  with another CRC) is written into the game's own `maps\<name>\` folder, over a same-named map
+  that was there, and loaded from there; the game's copy of that map is gone.
+- **Ours:** noxsdl saves a downloaded map (its `.map` and the `.nxz` as sent) in `noxsdl_maps\<name>\`
+  beside noxcore.exe, or in the player's settings folder (SDL's pref folder) when the program's own
+  folder can't be written (noxsdl/src/map_cache_dir.cpp; `--map-cache` sets another), and never
+  writes into the game's maps folder. A join looks for the server's map by name and CRC in the
+  game's maps folder first, then in noxsdl_maps (HeadlessClient's map check); only when neither
+  holds it with the server's CRC is it downloaded. A same-named map in the game's folder with
+  another CRC is left as it is: both stay, and each server gets the one with its CRC. The folder
+  chosen is logged at start ("downloaded maps: ...").
+- **Why:** by the owner's decision, 2026-11-13 ("im fine with nox core downloaded maps being in the
+  noxcore folder, and it should be listed as a difference"): NoX Core never writes into the game's
+  install (often in Program Files, where it may not be allowed to), and a download never replaces
+  the player's own copy of a map.
+- **Risk:** the stock client (GAME.EXE) doesn't see NoX Core's downloads: it downloads the map again
+  into its own maps folder. A map downloaded by NoX Core isn't in the game's map lists for hosting
+  or solo play until copied there.
+- **Revert:** pass the game's maps folder as the map cache (`--map-cache <game>\maps`), and let a
+  download overwrite a same-named map there.
+
 ## Client display (no effect on the wire)
 
 These change only what noxsdl shows; every one is off with `--stock-effects` or the matching
@@ -514,9 +570,20 @@ does: what comes between frames waits for the next one. The frames
 themselves are the classic ones at every rate (tested at 30 and 120 Hz with the controls coming
 in between frames).
 Identification: before joining, noxsdl sends the game list's extended query (00 00 F0 "NXSD")
-from the socket it then connects from; a noxcpp server marks that connection, a stock server drops
+from the socket it then connects from; a noxcpp server marks that connection (a query from that
+address and port at most ten minutes before the connect, other queries in between or not: an
+older one, or another port's, leaves it a stock client's, sent none of noxcpp's own
+messages), a stock server drops
 the query (its packet handler: no connection yet), and a stock client never asks, so neither ever sees the
 message. Checked live against a stock GAME.EXE server on XWIS: the join went as usual.
+Not to a game the list had from XWIS alone that answered none of its pings (a GAME.EXE host
+started from Westwood Online answers no discover ping: its receive takes 0x0C only in a LAN
+game): that join sends nothing before its TRY_JOIN, as the 1.2b client's (LiveSession's
+`stockShaped`), and the game list sends such a host only the stock ping, its query only to a
+server that answered one (ServerBrowser::pollUdp). An XWIS game chosen while its ping is still
+out ("Checking...") is joined once the ping has answered or run out, or after at most 3 seconds
+(identify_wait.hpp's PingWait), the "Attempting to connect" dialog and its Cancel up meanwhile;
+the 1.2b client waits for no ping (only for XWIS to let it into the game's channel: VD-25).
 
 ### VD-12: noxsdl on a noxcpp server: fresh input (HeadlessClient::setFreshInput)
 
@@ -1715,7 +1782,15 @@ The engine's logic is the exe's; these are where the output differs.
 
 - **Vanilla:** WOLAPI's one session lasts from the login through the chat, the game list and the
   game (a host's game is its channel on that session; a guest stays logged in too), till the
-  player logs off.
+  player logs off. A guest picking a listed game first joins its channel (WOLAPI's
+  RequestChannelJoin: `JOINGAME #<host>'s_game 1 <key>`) and sends the host its TRY_JOIN only once
+  XWIS has said it's in (the event sink's channel-join answer, in the "joining a game" state);
+  the host's own game code does nothing when a guest joins its channel (no check of the channel's
+  users at its TRY_JOIN, nothing sent to the guest), and WOLAPI sends no UDP of its own (its pings
+  are ICMP).
+- **Ours (the join):** noxsdl never joins a game's channel: logged off, it sends the TRY_JOIN to the
+  listed address at once. A host behind something that lets in only the players in its channel
+  (a community tool, not GAME.EXE) would never hear it; not settled (2026-11-13).
 - **Ours:** noxsdl logs off (QUIT, then waits up to 3 seconds for XWIS to close) before it joins
   or hosts a game (Menus::join), since a hosted game posts itself on a connection of its own with
   the same nick (lobby/xwis_host) and the menus aren't run during a game to answer XWIS's pings.
@@ -1756,8 +1831,11 @@ The engine's logic is the exe's; these are where the output differs.
     folder) or with --server, marked "list" in the From column; in Network's list they come
     after the LAN's games.
   - Westwood Online's list also has the LAN's games, beside XWIS's.
-  - Register is Skip Login (Menus::onLogin): Westwood Online's list without a login, XWIS
-    listed through a throwaway listing nick.
+  - Register is Skip Login (Menus::onLogin): Westwood Online's list with no login name, XWIS
+    listed through a throwaway listing nick, games joined with no account name. A game hosted
+    from there is posted to XWIS (and is a WOL game, as a logged-in host's) under a generated
+    login, "NoX" and six hex digits with the nick as its password (lobby::xwisGuestNick,
+    Menus::hostLogin); before 2026-11-13 it was LAN only.
   - --browse opens Network's list.
 - **Revert:** Options::servers left empty (no servers.txt); in Westwood Online's list,
   Options::lan off; Register's own screen back in place of Skip Login.
@@ -1784,7 +1862,7 @@ The engine's logic is the exe's; these are where the output differs.
   the large one scaled down looked best and keeps the menus' large lettering.
 - **Revert:** `kLargeScale` 1 (the full size; the labels overflow again).
 
-### VD-70: XWIS's chat server: servserv's first match, xwis.net:4000 when servserv gives none
+### VD-70: XWIS's way in: servserv at xwis.net:4005, then xwis.net:4000, then servserv.westwood.com:4005; the login without SERIAL
 
 - **Vanilla:** before a login the game asks WOLAPI for the server list with the SKU from the
   registry (HKLM SOFTWARE\Westwood\Nox, SKU: 9472 on an English install), version 0x10004, the
@@ -1794,26 +1872,48 @@ The engine's logic is the exe's; these are where the output differs.
   a digit and whose codes include its language (the SKU's low four bits) in a server-choice
   window, the first one picked, and connects to the one chosen with a 30-second timeout. With
   servserv out of reach, silent or listing none, the player gets an error and stays off line.
-  The chat login sends CVERS 11020 (WOLAPI 1.20), PASS, NICK, apgar, SERIAL with the CD key, USER,
-  `verchk <SKU> <version>` and `SETOPT 17,33` (others may find and page the player).
+  The 30 seconds are WOLAPI's deadline for a connection to open. The chat login sends, in this
+  order: `CVERS 11020 9472` (WOLAPI 1.20's version and the SKU), `PASS supersecret`, NICK,
+  `apgar <password> 0`, `SERIAL <CD key>` (always sent: `SERIAL ` with nothing after it when the
+  install has no CD key in the registry), `USER UserName HostName irc.westwood.com
+  :RealName`, `verchk 32512 720916` (WOLAPI's
+  product code for the language and its chat version number) and `SETOPT 17,33` (others may
+  find and page the player). The community's patched WOLAPI.DLL (1.15, in the Nox Reloaded /
+  Nox Solution install) sends the same lines but asks servserv at xwis.net:4005 instead.
 - **Ours:** `lobby::XwisConnection` (noxcore/include/noxcore/lobby/servserv.hpp) sends the same query, always as
   English Nox (SKU 9472) and with an empty CD key, and takes the first matching chat server
-  without a window. It waits 15 seconds for servserv; when servserv can't be looked up or reached,
-  doesn't answer in time, closes before 607 or names no chat server for the language, it connects
-  to xwis.net:4000 as before and logs why ("XWIS: servserv failed (...), using xwis.net:4000").
-  The chat login (lobby's `xwisLoginLines`) sends CVERS 11015, PASS, NICK, apgar and USER only:
-  no SERIAL, chat-server verchk or SETOPT.
-- **Why:** servserv first is the stock client's way in, which reached XWIS where xwis.net's own
-  address didn't (public issue #14, the owner's OK of 2026-11-10); the fallback keeps NoX Core
-  working wherever it worked before when servserv is down. 15 seconds keeps the screens
-  responsive. XWIS lists one chat server, so a choice window would only add a click. NoX Core
-  reads no CD key.
-- **Risk:** a servserv that names a server only for another language is passed over for
-  xwis.net:4000; a non-English player is seen as English. XWIS accepts the shorter login today;
-  without SETOPT the chat server's own find and page defaults apply to NoX Core players.
-- **Revert:** a server-choice window over `ServservSession::chatServers()`; no fallback
-  (`XwisRoute::fallback` failing); `kServservTimeoutMs` 30000; the stock lines in
-  `xwisLoginLines`.
+  without a window. By decision, 2026-11-11, it goes in this order:
+  1. servserv at xwis.net:4005, as the community-patched client does, and the chat server it
+     names;
+  2. if that fails, the chat server xwis.net:4000 directly;
+  3. only if that also fails, servserv at servserv.westwood.com:4005 and the chat server it
+     names (skipped when it has the address step 1 asked).
+  A step fails when its name can't be looked up or its connection is refused (the next step
+  starts at once), when a connection isn't open in 30 seconds, or when a servserv doesn't answer
+  in the stock 30 seconds (`kServservTimeoutMs`), closes before 607 or names no chat server for
+  the language. Each step's outcome is logged ("XWIS: xwis.net:4005 gave chat server ...",
+  "XWIS: servserv failed (...), using xwis.net:4000", "XWIS: failed (...), asking servserv
+  servserv.westwood.com:4005"). Every login on the chat server (the WOL chat, a player's login
+  check, the game list's listing login, a hosted game's post) has 30 seconds
+  (`kXwisChatTimeoutMs`) from the chat connection's start to its welcome; a hosted game's post
+  not in its channel by then tries again 30 seconds later. The chat login (lobby's
+  `xwisLoginLines`) sends the stock lines in the stock order, without SERIAL: by decision,
+  2026-11-11, no CD key is read or sent (whereto's serial stays empty too). An error reply to
+  verchk or SETOPT is passed over, and nothing waits for their answers.
+- **Why:** servserv first is how both the stock and the community clients find the chat server,
+  and the community client's xwis.net:4005 reached XWIS where xwis.net's own chat address didn't
+  (public issue #14); xwis.net:4000 directly keeps NoX Core working wherever it worked before;
+  servserv.westwood.com is the stock client's own way in, for a network where xwis.net is out
+  of reach. The wait times and login lines are the stock client's (the owner's call,
+  2026-11-11). XWIS lists one chat server, so a choice window would only add a click.
+- **Risk:** a servserv that names a server only for another language is passed over; a
+  non-English player is seen as English. With every way in silent, the game list waits up to
+  two minutes (two servservs, the chat connection and the login) before saying so. XWIS takes
+  logins without SERIAL today; were it to require a CD key, NoX Core's logins would be refused.
+- **Revert:** servserv.westwood.com:4005 alone in `XwisRoute::servservs`'s default, no fallback
+  (`XwisRoute::fallback` failing), and a server-choice window over
+  `ServservSession::chatServers()`; a SERIAL line in `xwisLoginLines` (only with a new decision
+  on the CD key).
 
 ## Server: memory safety
 

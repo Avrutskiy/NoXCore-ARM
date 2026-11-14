@@ -230,6 +230,84 @@ void Menus::showGameBrowser()
     enter(State::Browser);
 }
 
+void Menus::showJoinWait(std::function<void()> onCancel)
+{
+    // The character screen gone, the game list back under the dialog (the join from SelChar's Load
+    // or SelColor's Accept destroys their screens: the world window is what shows), not fetched
+    // again; logged off WOL for the join, it isn't logged in again till the list comes back
+    // (showGameBrowser).
+    nowMs_ = SDL_GetTicks();
+    reset();
+    stack_ = {State::MainMenu, State::Online};
+    if (wolMode_ && wolLogin_ && !skippedLogin_) {
+        stack_.push_back(State::Login);
+        stack_.push_back(State::Chat);
+    }
+    keepList_ = true;
+    enter(State::Browser);
+    joinCancel_ = std::move(onCancel);
+    joinWaitUp_ = true;
+    joinWords_ = {};
+    joinWaitWords({"", "Noxworld.c:AttemptingConn", 2}); // (Gui_Dialog_Create's 0x22: Cancel)
+}
+
+void Menus::joinWaitWords(const join_wait::Words& words)
+{
+    if (!joinWaitUp_ || words == joinWords_) {
+        return;
+    }
+    joinWords_ = words;
+    dialog(words.title.empty() ? std::string() : gui_.text(words.title), gui_.text(words.text), words.buttons, {},
+           [this] { cancelJoinWait(); });
+    if (words.buttons & 2) {
+        dialogEscape_ = [this] {
+            closeDialog();
+            cancelJoinWait();
+        };
+    } else {
+        dialogEscape_ = [] {}; // (no buttons: Escape does nothing)
+    }
+}
+
+void Menus::cancelJoinWait()
+{
+    // The dialog's Cancel (windowMultiplayerSub's 0xFA2): the join dropped, the game list again.
+    if (!joinWaitUp_) {
+        return;
+    }
+    joinWaitUp_ = false;
+    joinWords_ = {};
+    if (auto cancel = std::exchange(joinCancel_, {})) {
+        cancel();
+    }
+    showGameBrowser();
+}
+
+void Menus::joinWaitFailed(const join_wait::Words& words)
+{
+    // The lobby's error (the join's state 2): the dialog's words turned to why, its OK; OK (state
+    // 1's 0xFA1) goes back to the game list, fetched again.
+    joinWaitUp_ = false;
+    joinCancel_ = {};
+    joinWords_ = words;
+    dialog(words.title.empty() ? std::string() : gui_.text(words.title), gui_.text(words.text), words.buttons | 1,
+           [this] { showGameBrowser(); });
+    dialogEscape_ = [this] {
+        closeDialog();
+        showGameBrowser();
+    };
+}
+
+void Menus::endJoinWait()
+{
+    if (joinWaitUp_) {
+        joinWaitUp_ = false;
+        joinCancel_ = {};
+        joinWords_ = {};
+        closeDialog();
+    }
+}
+
 void Menus::notice(const std::string& titleId, const std::string& textId)
 {
     dialog(gui_.text(titleId), gui_.text(textId), 0x21, {});
@@ -515,7 +593,9 @@ void Menus::enter(State s)
                                 p.toOutput(pos.x + kListFrame.x, pos.y + kListFrame.y, kListFrame.w, kListFrame.h),
                                 p.pixelSize(false));
         };
-        refreshGames();
+        if (!std::exchange(keepList_, false)) { // (the join's wait: the list as it was)
+            refreshGames();
+        }
         break;
     }
     case State::Chat:
@@ -881,6 +961,7 @@ bool Menus::onOnline(gui::Window& from)
         wolMode_ = false;
         lanOnly_ = true;
         wolLogin_.reset();
+        guestLogin_.reset();
         browser_.setXwisListing(false);
         leave([this] { enter(State::Browser); });
         return true;
@@ -922,7 +1003,7 @@ void Menus::setupLogin()
     // Register: XWIS makes an account on its first login, so it's our way to go on without one.
     if (gui::Window* skip = screen_->find(kLoginSkip)) {
         skip->text = "Skip Login";
-        skip->tooltip = "Go to the game list without logging in to XWIS (no account name is sent)";
+        skip->tooltip = "Go to the game list with no login name (a game you host is listed on XWIS under a generated one)";
     }
     if (gui::Window* go = screen_->find(kLoginGo)) {
         go->tooltip = "Log in to XWIS (a new name makes a new account with this password)";
@@ -1005,11 +1086,18 @@ bool Menus::onLogin(int message, gui::Window& from)
         scrollLogins(list ? list->scroll + 1 : 0);
         return true;
     case kLoginSkip:
-        // On to the game list without logging in: no account name at all (not a saved login's,
+        // On to the game list with no login name: no account name at all (not a saved login's,
         // nor an earlier login's), XWIS listed through a throwaway login (Westwood Online's list,
-        // not Network's).
+        // not Network's), and a game hosted from there posted to XWIS under a generated login,
+        // its password the nick (XWIS lists a game under its host's login, and makes the account
+        // on the spot).
         skippedLogin_ = true;
         wolLogin_.reset();
+        {
+            std::random_device entropy;
+            const std::string guest = nox::lobby::xwisGuestNick(static_cast<std::uint32_t>(entropy()));
+            guestLogin_ = nox::io::SavedLogin{guest, guest};
+        }
         wolMode_ = false;
         lanOnly_ = false;
         profile_.account.clear();
@@ -1118,6 +1206,7 @@ void Menus::loginDone()
     profile_.account = pendingLogin_.nick;
     skippedLogin_ = false;
     wolLogin_ = pendingLogin_;
+    guestLogin_.reset();
     browser_.setXwisLogin(pendingLogin_.nick, pendingLogin_.password); // (lists without the connection)
     if (callbacks_.loggedIn) {
         callbacks_.loggedIn(pendingLogin_.nick);
@@ -2321,6 +2410,13 @@ void Menus::handleEvent(const SDL_Event& event, int width, int height, std::uint
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE && !event.key.repeat) {
         if (picker_ && !picker_->hidden()) {
             pick(0xDEAD);
+            return;
+        }
+        if (dialog_ && dialogEscape_) {
+            // (the join's dialog: Escape is its Cancel, or its OK once it says why the join
+            // failed; none while it has no buttons)
+            gui_.resources().sound(0x399);
+            deferred_.push_back(dialogEscape_);
             return;
         }
         if (dialog_) {

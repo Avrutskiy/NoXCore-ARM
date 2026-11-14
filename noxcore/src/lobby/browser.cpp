@@ -13,9 +13,9 @@ namespace nox::lobby {
 
 namespace {
 
-constexpr std::uint32_t kXwisTimeoutMs = 15'000;
-constexpr std::uint32_t kPingRetryMs = 1'000;
-constexpr int kPingTries = 3;
+// The listing login's time on the chat server, counted from the chat connection's start; servserv
+// has its own kServservTimeoutMs before it, so the listing can take both (60 s), as the game's.
+constexpr std::uint32_t kXwisTimeoutMs = kXwisChatTimeoutMs;
 constexpr std::uint32_t kBroadcastWaitMs = 1'500;
 constexpr std::uint32_t kBroadcast = 0xFFFFFFFF; // 255.255.255.255
 
@@ -100,10 +100,9 @@ void ServerBrowser::ping(const net::Endpoint& to, std::uint32_t nowMs, bool broa
         if (!broadcast) {
             markChecking(to, true);
         }
-        // Beside it, in its own datagram, the query only a noxcpp server answers (a stock one
-        // drops it: extended.hpp).
-        udp_->sendTo(to, encodeExtendedQuery(token));
-        queried_.insert(token);
+        // (The query only a noxcpp server answers goes once the server has answered this ping:
+        // pollUdp. A GAME.EXE host started from Westwood Online answers no ping, and so is sent
+        // nothing of NoX Core's, as the 1.2b client sends it nothing before its join.)
     } catch (const std::exception& ex) {
         log_.push_back("ping " + to.toString() + ": " + ex.what());
     }
@@ -353,6 +352,15 @@ void ServerBrowser::pollUdp(std::uint32_t nowMs)
         const auto p = pings_.find(info.token);
         if (p == pings_.end()) {
             continue; // not ours, or already answered
+        }
+        // The server answered: now, in its own datagram, the query only a noxcpp server answers
+        // (one that answers no ping, a GAME.EXE host from Westwood Online, is never sent it; a
+        // stock one that answers drops it: extended.hpp).
+        try {
+            udp_->sendTo(got->from, encodeExtendedQuery(info.token));
+            queried_.insert(info.token);
+        } catch (const std::exception& ex) {
+            log_.push_back("ping " + got->from.toString() + ": " + ex.what());
         }
         ServerEntry& e = upsert(got->from.address, got->from.port);
         const unsigned sources = e.sources | (p->second.broadcast ? kFromLan : 0u);
